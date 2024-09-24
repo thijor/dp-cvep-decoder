@@ -79,7 +79,7 @@ class OnlineDecoder:
         input_stream_name: str,
         output_stream_name: str,
         input_window_seconds: float,
-        new_sfreq: float | None = None,
+        classifier_input_sfreq: float | None = None,
         band: tuple[float, float] = (0.5, 40),
         t_sleep_s: float = 0.1,
         marker_stream_name: str | None = None,
@@ -98,6 +98,9 @@ class OnlineDecoder:
         self.marker_stream_name = marker_stream_name
         self.markers = markers
         self.offset_nsamples = offset_nsamples
+        self.curr_offset_nsamples = (
+            offset_nsamples  # used of epochs are sliced by markers
+        )
 
         self.input_sw: StreamWatcher = None
         # Will be derived once the input_sw is connected
@@ -192,16 +195,49 @@ class OnlineDecoder:
 
     # ------------------ Online functionality ---------------------------------
 
-    def check_enough_time_based(self):
+    def check_enough_time_based(self) -> bool:
         return False
 
-    def check_enough_sample_based(self):
+    def check_enough_sample_based(self) -> bool:
         return False
 
-    def check_enough_marker_based(self):
-        return False
+    def check_enough_marker_based(self) -> bool:
+        n_new = self.input_mrk_sw.n_new
+        if n_new == 0:
+            return False
 
-    def _create_epoch(self):
+        markers = self.input_mrk_sw.unfold_buffer()[-n_new:, 0]
+        markers_t = self.input_mrk_sw.unfold_buffer_t()[-n_new:]
+
+        # TODO: Filter only the selected markers -> then take only the latest?
+
+        # find the closest match of time points between markers and data
+        t = self.input_sw.unfold_buffer_t()[-self.filterbank.n_new :]
+        idx_end = np.abs(markers_t[:, None] - t).argmin(axis=1)
+
+        # the offset we will effectivefly use is the global shift (by self.offset_nsamples)
+        # plus wherever the triggering marker is relative to the latest data
+        # sample from the input_sw
+        self.curr_offset_nsamples = self.offset_nsamples + (len(t) - idx_end)
+
+        return True
+
+    def _filter(self):
+        if self.input_sw is None:
+            logger.error(
+                "Input StreamWatcher not connected, use `self.connect_input_streams` first"
+            )
+            return 1
+
+        if self.input_sw.n_new == 0:
+            logger.debug("No new samples to filter")
+        else:
+            self.filterbank.filter(
+                self.input_sw.unfold_buffer()[-self.input_sw.n_new :, :],
+                self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :],
+            )
+
+    def _create_epoch(self) -> NDArray:
         """
         Always use all new data in the filter buffer triggering this methods
         is timed to the desired evaluation trigger frequency
@@ -212,8 +248,31 @@ class OnlineDecoder:
         logger.debug(
             f"Creating one epoch from the {self.filterbank.n_new} latest samples"
         )
-        x = x[-self.filterbank.n_new :, :, 0]
+
+        x = x[
+            -(
+                self.filterbank.n_new + self.curr_offset_nsamples
+            ) : -self.curr_offset_nsamples,
+            :,
+            0,
+        ]
         x = x.T[None, :, :]  # (1, n_channel, n_times)
+
+        if np.isnan(x).sum() > 0:
+            logger.error("NaNs found after epoching")
+
+        return x
+
+    def _resample(self, x: NDArray) -> NDArray:
+
+        if self.classifier_input_sfreq is not None:
+            logger.debug(f"Resampling to {self.classifier_input_sfreq} Hz")
+            up = self.input_sfreq / self.classifier_input_sfreq
+            x = resample(x.astype("float64"), up=up, axis=-1).astype("float32")
+            if np.isnan(x).sum() > 0:
+                logger.error("NaNs found after resampling")
+
+        return x
 
     def update(self):
 
@@ -226,11 +285,13 @@ class OnlineDecoder:
 
             self._filter()
 
-            # [ ] TODO: -- < resample where? >
-            self._resample()
-
             x = self._create_epochs()
-            self._classify(x)
+
+            # This reflects the current ordering, consider resampling on raw
+            # after indeces for epochs are set
+            xs = self._resample(x)
+
+            self._classify(xs)
 
             # reset the counters of the StreamWatchers and the FilterBank
             for sw in self.input_sws:
@@ -288,7 +349,7 @@ class OnlineDecoder:
             # logger.debug("No events can be epoched")
             return 0
 
-        logger.debug(f"Loading the latest data samples")
+        logger.debug("Loading the latest data samples")
         x = self.filterbank.get_data()[:, 1:33, 0]
         assert len(t) == x.shape[0]
         logger.debug(
@@ -302,32 +363,7 @@ class OnlineDecoder:
         )
         return x
 
-    def _filter(self):
-        if self.input_sw is None:
-            logger.error(
-                "Input StreamWatcher not connected, use `self.connect_input_streams` first"
-            )
-            return 1
-
-        if self.input_sw.n_new == 0:
-            logger.debug("No new samples to filter")
-        else:
-            self.filterbank.filter(
-                self.input_sw.unfold_buffer()[-self.input_sw.n_new :, :],
-                self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :],
-            )  # after this step, the buffer within filterbank has the filtered data
-            self.input_sw.n_new = 0
-
     def _classify(self, x: NDArray):  # (batch_size, n_channel, n_times)
-        if np.isnan(x).sum() > 0:
-            logger.error("NaNs found after epoching")
-
-        if self.new_sfreq is not None:
-            logger.debug(f"Resampling to {self.new_sfreq} Hz")
-            up = self.input_sfreq / self.new_sfreq
-            x = resample(x.astype("float64"), up=up, axis=-1).astype("float32")
-            if np.isnan(x).sum() > 0:
-                logger.error("NaNs found after resampling")
 
         logger.debug(f"Computing {x.shape[0]} embedding(s)")
         y = self.classifier.predict(x)[0]
