@@ -326,3 +326,6 @@ def test_running_loop(provide_running_decoder):
     samples, sample_times = inlet.pull_chunk()
 
     assert len(samples) > 0
+
+    # also assert that the values are as expected
+    assert samples[0][0] == 0 or samples[0][0] == 1

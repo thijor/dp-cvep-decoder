@@ -19,22 +19,12 @@ from pyntbci.classifiers import rCCA
 
 from cvep_decoder.utils.logging import logger
 
-"""
-Adjustments in new version since 2024-09-24:
-- the classifier file should contain info about:
-    - expected sampling frequency for input
-    - band to filter for in feature generation process
-    TODO: add start and stop decoding based on markers
-
-"""
-
 
 class OnlineDecoder:
     """Decoder class to evaluate a classifier based on data from a LSL stream.
 
     Parameters
     ----------
-
     classifier : rcca
         classifier object to use for decoding
 
@@ -230,10 +220,12 @@ class OnlineDecoder:
         )
         self.output_sw = pylsl.StreamOutlet(info)
 
-    def init_all(self):
+    def init_all(self) -> int:
+        """Return an int as this is exposed as a PCOMM `CONNECT_DECODER`"""
         self.connect_input_streams()
         self.create_filterbank()
         self.create_output_stream()
+        return 0
 
     # ------------------ Online functionality ---------------------------------
 
@@ -348,6 +340,11 @@ class OnlineDecoder:
 
         if self.input_mrk_sw.n_new > 0:
             markers = self.input_mrk_sw.unfold_buffer()[-self.input_mrk_sw.n_new :, 0]
+            markers_t = self.input_mrk_sw.unfold_buffer_t()[-self.input_mrk_sw.n_new :]
+
+            logger.debug(f"Checking for {self.start_eval_marker=}")
+            logger.debug(f"Checking through {markers=}, {markers_t}")
+
             if self.start_eval_marker in markers:
                 logger.debug(
                     f"Starting decoding based on marker {self.start_eval_marker}"
@@ -428,6 +425,7 @@ class OnlineDecoder:
             kwargs={"stop_event": stop_event},
         )
         thread.start()
+        logger.debug("Started the run loop")
         return thread, stop_event
 
 

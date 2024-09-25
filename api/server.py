@@ -1,4 +1,3 @@
-from functools import partial
 from pathlib import Path
 
 from dareplane_utils.default_server.server import DefaultServer
@@ -12,11 +11,12 @@ def main(
     port: int = 8080,
     ip: str = "127.0.0.1",
     loglevel: int = 10,
-    conf_path: Path = Path("./configs/decoder.toml"),
+    conf_pth: Path = Path("./configs/decoder.toml"),
 ):
     logger.setLevel(loglevel)
 
-    decoder = online_decoder_factory(conf_path)
+    logger.debug(f"Initializing decoder with {conf_pth=}")
+    decoder = online_decoder_factory(conf_pth)
 
     pcommand_map = {
         # "CREATE CLASSIFIER": partial(
