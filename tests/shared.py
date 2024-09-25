@@ -68,6 +68,7 @@ def provide_config_toml():
                 "lsl_stream_name": "test_eeg_data",
                 "buffer_size_s": 3.0,
                 "lsl_marker_stream_name": "test_marker_stream",
+                "selected_channels": [1, 2],
             },
             "output": {"lsl_stream_name": "test_cvep_decoder", "buffer_size_s": 1.0},
             "classifier": {"file": "./test.joblib", "meta_file": "./test_meta.json"},

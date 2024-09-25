@@ -1,22 +1,33 @@
-from fire import Fire
-
-from decoder.decoder import create_classifier, decode
-from decoder.utils.logging import logger
 from functools import partial
+from pathlib import Path
 
 from dareplane_utils.default_server.server import DefaultServer
+from fire import Fire
+
+from cvep_decoder.online_decoding import online_decoder_factory
+from cvep_decoder.utils.logging import logger
 
 
-def main(port: int = 8080, ip: str = "127.0.0.1", loglevel: int = 10):
+def main(
+    port: int = 8080,
+    ip: str = "127.0.0.1",
+    loglevel: int = 10,
+    conf_path: Path = Path("./configs/decoder.toml"),
+):
     logger.setLevel(loglevel)
 
+    decoder = online_decoder_factory(conf_path)
+
     pcommand_map = {
-        "CREATE CLASSIFIER": partial(create_classifier, subject="P001", session="S001", run="001"),
-        "DECODE ONLINE": partial(decode, subject="P001", session="S001")
+        # "CREATE CLASSIFIER": partial(
+        #     create_classifier, subject="P001", session="S001", run="001"
+        # ),
+        "CONNECT_DECODER": decoder.init_all,
+        "DECODE ONLINE": decoder.run,
     }
 
     server = DefaultServer(
-        port, ip=ip, pcommand_map=pcommand_map, name="decoder_server"
+        port, ip=ip, pcommand_map=pcommand_map, name="cvep_decoder_server"
     )
 
     # initialize to start the socket

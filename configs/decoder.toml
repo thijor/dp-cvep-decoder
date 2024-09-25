@@ -18,6 +18,7 @@ sleep_s = 0.1                            # time between updates in seconds
 lsl_stream_name = 'eeg_data'
 buffer_size_s = 1.0
 lsl_marker_stream_name = 'my_marker_stream'
+# selected_channels = ['C3', 'Cz', 'C4']   # channels to be used for decoding, use the names as they would appear in the lsl streams meta data
 
 [online.output]
 lsl_stream_name = 'cvep_decoder'

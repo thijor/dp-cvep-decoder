@@ -23,3 +23,6 @@ def test_creation_with_default_config(provide_config_toml, provide_joblib_model)
     assert online_decoder.buffer_size_s == 3
     assert online_decoder.classifier.fs == classifier.fs
     assert np.allclose(online_decoder.classifier.stimulus, classifier.stimulus)
+    assert (
+        online_decoder.selected_channels == cfg["online"]["input"]["selected_channels"]
+    )

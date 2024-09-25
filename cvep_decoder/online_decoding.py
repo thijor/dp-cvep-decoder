@@ -87,6 +87,10 @@ class OnlineDecoder:
     pre_eval_start_s : float
         Time window of data to include before the start marker for classification arrived. Default is 0.0s.
 
+    selected_channels : list[str] | list[int] | None
+        if a list of channel names is provided, data of only those channels will
+        be processed. Default is None -> all channels are considered. If list of integers is provided, they are interpreted as indeces.
+
     """
 
     def __init__(
@@ -107,6 +111,7 @@ class OnlineDecoder:
         eval_after_s: float = 1,
         eval_after_nsamples: int = 10,
         pre_eval_start_s: float = 0.0,
+        selected_channels: list[str] | None = None,
     ):
         self.classifier = classifier
         self.classifier_meta = classifier_meta
@@ -126,6 +131,9 @@ class OnlineDecoder:
         self.pre_eval_start_s = pre_eval_start_s
         self.eval_after_s = eval_after_s
         self.eval_after_nsamples = eval_after_nsamples
+
+        self.selected_channels = selected_channels
+        self.selected_ch_idx = None  # will be set once connected to the input stream
 
         self.is_decoding: bool = False
         self.start_eval_time: float = 0.0
@@ -161,12 +169,27 @@ class OnlineDecoder:
 
         self.input_sw.connect_to_stream()
 
-        # set input_sfreq and input_chs_info
+        # set derived properties
         self.input_sfreq = self.input_sw.inlet.info().nominal_srate()
         self.pre_eval_start_n = int(self.pre_eval_start_s * self.input_sfreq)
         self.input_chs_info = [
             dict(ch_name=ch_name, type="EEG") for ch_name in self.input_sw.channel_names
         ]
+
+        if self.selected_channels is None:
+            self.selected_ch_idx = list(range(len(self.input_chs_info)))
+        else:
+            if isinstance(self.selected_channels[0], str):
+                self.selected_ch_idx = [
+                    self.input_sw.channel_names.index(ch)
+                    for ch in self.selected_channels
+                ]
+            elif isinstance(self.selected_channels[0], int):
+                self.selected_ch_idx = self.selected_channels
+            else:
+                raise ValueError(
+                    f"{self.selected_channels=} must be a list of `str` or `int` or `None`."
+                )
 
         # We require the marker stream to start the decoding (start trials)
         logger.debug(f'Connecting to marker stream "{self.marker_stream_name}"')
@@ -189,7 +212,7 @@ class OnlineDecoder:
             bands={"band": self.band},
             sfreq=self.input_sfreq,
             output="signal",
-            n_in_channels=len(self.input_chs_info),
+            n_in_channels=len(self.selected_ch_idx),
             filter_buffer_s=self.buffer_size_s,
         )
 
@@ -263,7 +286,9 @@ class OnlineDecoder:
             logger.debug("No new samples to filter")
         else:
             self.filterbank.filter(
-                self.input_sw.unfold_buffer()[-self.input_sw.n_new :, :],
+                self.input_sw.unfold_buffer()[
+                    -self.input_sw.n_new :, self.selected_ch_idx
+                ],
                 self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :],
             )
 
@@ -415,6 +440,7 @@ def online_decoder_factory(config_path: Path = Path("./configs/decoder.toml")):
         eval_after_nsamples=cfg["online"]["eval"].get("eval_after_nsamples", 1),
         pre_eval_start_s=cfg["online"]["eval"]["start"]["pre_eval_start_s"],
         max_eval_time_s=cfg["online"]["eval"]["start"]["max_time_s"],
+        selected_channels=cfg["online"]["input"].get("selected_channels", None),
     )
 
     return online_dec

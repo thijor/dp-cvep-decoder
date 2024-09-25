@@ -96,7 +96,9 @@ def provide_running_decoder(
     provide_marker_stream: pylsl.StreamOutlet,
 ) -> tuple[OnlineDecoder, pylsl.StreamOutlet]:
     cvd = provide_cvep_decoder
+    cvd.selected_channels = None  # select all channels for this use case
     outlet = provide_marker_stream
+
     cvd.init_all()
     cvd.eval_after_s = 0.1
 
@@ -142,7 +144,7 @@ def test_filterbank_init(
     cvd.create_filterbank()
 
     assert cvd.filterbank is not None
-    assert cvd.filterbank.n_in_channels == 5
+    assert cvd.filterbank.n_in_channels == 2
     assert cvd.filterbank.bands["band"] == [1, 40]
     assert len(cvd.filterbank.bands) == 1  # only a single band for the test cfg
 
@@ -265,7 +267,7 @@ def test_epoch_creation(
     x = cvd._create_epoch()
     assert x.ndim == 3
     assert len(x) == 1
-    assert x.shape[1] == len(cvd.input_sw.channel_names)
+    assert x.shape[1] == len(cvd.selected_ch_idx)
 
 
 def test_resampling(spawn_lsl_data_stream, provide_cvep_decoder, provide_marker_stream):
