@@ -1,4 +1,6 @@
+import json
 import threading
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -20,6 +22,7 @@ Adjustments in new version since 2024-09-24:
 - the classifier file should contain info about:
     - expected sampling frequency for input
     - band to filter for in feature generation process
+    TODO: add start and stop decoding based on markers
 
 """
 
@@ -33,26 +36,36 @@ class OnlineDecoder:
     classifier : rcca
         classifier object to use for decoding
 
+    classifier_meta: dict
+        Dictionary with metadata about the classifier. Should contain:
+            - sfreq: float
+            - band: tuple[float, float]
+
     input_stream_name : str
         Name of the input stream (containing the signal).
 
     output_stream_name : str
-        Name of the output stream (containing the embeddings).
+        Name of the output stream for the result of classifier.predict().
 
-    input_window_seconds : float
-        Temporal size of the window that should be passed to the  model.
+    input_buffer_size_s : float
+        Temporal size of the window that should be passed to the model. Will
+        define the size of the buffer for the `input` StreamWatcher and the
+        buffer size of the FilterBank.
 
     t_sleep_s : float
         Time to sleep between updates, defines the update frequency. Default is 0.1s.
 
-    band : tuple[float, float]
-        Band to filter the signal before passing it to the model. Default is (0.5, 40).
+    start_eval_marker : str
+        the marker that starts the continuous evaluation
+
+    max_eval_time_s : float
+        maximum time to look to try decoding a trial. Default is 10s.
 
     marker_stream_name : str | None
         Optional name of the marker stream. If a stream is provided, the projections will be synchronised
         with the markers. Else,....fixed lenght epochs? Default is None.
 
-    markers : list[str]
+    decode_trigger_markers : list[str]
         List of markers to trigger a decoder evaluation. Only used if marker_stream_name is not None. Default is None.
 
     offset_nsamples : float
@@ -71,36 +84,51 @@ class OnlineDecoder:
         Number of samples after which the classifier should be evaluated.
         Default is 10.
 
+    pre_eval_start_s : float
+        Time window of data to include before the start marker for classification arrived. Default is 0.0s.
+
     """
 
     def __init__(
         self,
         classifier: rCCA,
+        classifier_meta: dict,
         input_stream_name: str,
+        marker_stream_name: str,
         output_stream_name: str,
-        input_window_seconds: float,
+        input_buffer_size_s: float,
+        start_eval_marker: str,
+        max_eval_time_s: float = 10,
         classifier_input_sfreq: float | None = None,
-        band: tuple[float, float] = (0.5, 40),
         t_sleep_s: float = 0.1,
-        marker_stream_name: str | None = None,
-        markers: list[str] | None = None,
+        decode_trigger_markers: list[str] | None = None,
         offset_nsamples: float = 0,
-        eval_after_type: Literal["time", "samples", "markers"] = "time",
+        eval_after_type: Literal["time", "nsamples", "markers"] = "time",
         eval_after_s: float = 1,
         eval_after_nsamples: int = 10,
+        pre_eval_start_s: float = 0.0,
     ):
         self.classifier = classifier
+        self.classifier_meta = classifier_meta
         self.input_stream_name = input_stream_name
         self.output_stream_name = output_stream_name
-        self.input_window_seconds = input_window_seconds
-        self.band = band
+        self.buffer_size_s = input_buffer_size_s
+        self.max_eval_time_s = max_eval_time_s
         self.t_sleep_s = t_sleep_s
         self.marker_stream_name = marker_stream_name
-        self.markers = markers
+        self.decode_trigger_markers = decode_trigger_markers
         self.offset_nsamples = offset_nsamples
         self.curr_offset_nsamples = (
             offset_nsamples  # used of epochs are sliced by markers
         )
+
+        self.start_eval_marker = start_eval_marker
+        self.pre_eval_start_s = pre_eval_start_s
+        self.eval_after_s = eval_after_s
+        self.eval_after_nsamples = eval_after_nsamples
+
+        self.is_decoding: bool = False
+        self.start_eval_time: float = 0.0
 
         self.input_sw: StreamWatcher = None
         # Will be derived once the input_sw is connected
@@ -108,33 +136,21 @@ class OnlineDecoder:
         self.input_chs_info: list[dict[str, str]] = None
         self.input_mrk_sw: StreamWatcher = None
 
-        # have a list with relevant streamwatchers to avoid if statements in update
-        # add mrk_sw if necessary
-        self.input_sws: list[StreamWatcher] = [self.input_sw]
-
         self.filterbank: FilterBank = None
         self.output_sw: StreamWatcher = None
 
-        # -------- Derived attributes ----------------------------------------
-        self.buffer_size_s = 3 * (
-            max(self.input_window_seconds, self.t_sleep_s) + abs(self.offset_nsamples)
-        )
+        # Derived attributes
+        self.classifier_input_sfreq = self.classifier_meta["sfreq"]
+        self.band = self.classifier_meta["band"]
+        self.pre_eval_start_n = None  # will be set once connected to input stream
 
-        self.model_sfreq = 1  # TODO: what is this?
+        eval_type_map = {
+            "time": self.check_enough_time_based,
+            "nsamples": self.check_enough_sample_based,
+            "markers": self.check_enough_marker_based,
+        }
 
-        self.enough_data_for_next_prediction
-
-    def n_outputs(self):
-        x = np.zeros(
-            (
-                1,
-                len(self.input_chs_info),
-                int(self.input_window_seconds * self.model_sfreq),
-            ),
-            dtype=np.float32,
-        )
-        y = self.classifier.predict(x)
-        return y.shape[1]
+        self.enough_data_for_next_prediction = eval_type_map[eval_after_type]
 
     # -------- Connection and initialization methods --------------------------
     def connect_input_streams(self):
@@ -147,18 +163,19 @@ class OnlineDecoder:
 
         # set input_sfreq and input_chs_info
         self.input_sfreq = self.input_sw.inlet.info().nominal_srate()
+        self.pre_eval_start_n = int(self.pre_eval_start_s * self.input_sfreq)
         self.input_chs_info = [
             dict(ch_name=ch_name, type="EEG") for ch_name in self.input_sw.channel_names
         ]
 
-        if self.marker_stream_name:
-            logger.info(f'Connecting to marker stream "{self.marker_stream_name}"')
-            self.input_mrk_sw = StreamWatcher(
-                self.marker_stream_name, buffer_size_s=self.buffer_size_s, logger=logger
-            )
-            self.input_mrk_sw.connect_to_stream()
-            if len(self.input_mrk_sw.channel_names) != 1:
-                logger.error("The marker stream should have exactly one channel")
+        # We require the marker stream to start the decoding (start trials)
+        logger.debug(f'Connecting to marker stream "{self.marker_stream_name}"')
+        self.input_mrk_sw = StreamWatcher(
+            self.marker_stream_name, buffer_size_s=self.buffer_size_s, logger=logger
+        )
+        self.input_mrk_sw.connect_to_stream()
+        if len(self.input_mrk_sw.channel_names) != 1:
+            logger.error("The marker stream should have exactly one channel")
 
     def create_filterbank(self):
         logger.debug("Creating the classifier and the filter bank.")
@@ -184,7 +201,7 @@ class OnlineDecoder:
             channel_count=1,
             nominal_srate=pylsl.IRREGULAR_RATE,
             channel_format="int32",
-            source_id="signal_embedding",  # TODO should it be more unique?
+            source_id="output_stream_id",
         )
         self.output_sw = pylsl.StreamOutlet(info)
 
@@ -196,10 +213,16 @@ class OnlineDecoder:
     # ------------------ Online functionality ---------------------------------
 
     def check_enough_time_based(self) -> bool:
-        return False
+        if (self.eval_after_s * self.input_sfreq) <= self.input_sw.n_new:
+            return True
+        else:
+            return False
 
     def check_enough_sample_based(self) -> bool:
-        return False
+        if self.eval_after_nsamples <= self.input_sw.n_new:
+            return True
+        else:
+            return False
 
     def check_enough_marker_based(self) -> bool:
         n_new = self.input_mrk_sw.n_new
@@ -209,25 +232,32 @@ class OnlineDecoder:
         markers = self.input_mrk_sw.unfold_buffer()[-n_new:, 0]
         markers_t = self.input_mrk_sw.unfold_buffer_t()[-n_new:]
 
-        # TODO: Filter only the selected markers -> then take only the latest?
+        trigger_marker_indices = [
+            i for i, m in enumerate(markers) if m in self.decode_trigger_markers
+        ]
 
-        # find the closest match of time points between markers and data
-        t = self.input_sw.unfold_buffer_t()[-self.filterbank.n_new :]
-        idx_end = np.abs(markers_t[:, None] - t).argmin(axis=1)
+        if any(trigger_marker_indices):
 
-        # the offset we will effectivefly use is the global shift (by self.offset_nsamples)
-        # plus wherever the triggering marker is relative to the latest data
-        # sample from the input_sw
-        self.curr_offset_nsamples = self.offset_nsamples + (len(t) - idx_end)
+            # find the closest match of time points between the last trigger marker and data sample times
+            t = self.input_sw.unfold_buffer_t()[-self.filterbank.n_new :]
+            idx_end = np.abs(markers_t[trigger_marker_indices[-1], None] - t).argmin(
+                axis=1
+            )
 
-        return True
+            # the offset we will effectivefly use is the global shift (by self.offset_nsamples)
+            # plus wherever the triggering marker is relative to the latest data
+            # sample from the input_sw
+            self.curr_offset_nsamples = self.offset_nsamples + (len(t) - idx_end)
+
+            return True
+        else:
+            return False
 
     def _filter(self):
         if self.input_sw is None:
             logger.error(
                 "Input StreamWatcher not connected, use `self.connect_input_streams` first"
             )
-            return 1
 
         if self.input_sw.n_new == 0:
             logger.debug("No new samples to filter")
@@ -237,6 +267,8 @@ class OnlineDecoder:
                 self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :],
             )
 
+            self.input_sw.n_new = 0  # reset to ensure only additional data gets filled onto the filterbank
+
     def _create_epoch(self) -> NDArray:
         """
         Always use all new data in the filter buffer triggering this methods
@@ -245,17 +277,23 @@ class OnlineDecoder:
 
         x = self.filterbank.get_data()
 
+        if x.shape[0] < self.filterbank.n_new:
+            logger.warning(
+                f"Buffer to small for providing all data for {self.filterbank.n_new=}."
+                f" Will continue with only {len(x) - self.curr_offset_nsamples}."
+                f" Current buffer size {self.buffer_size_s=}."
+            )
+
         logger.debug(
-            f"Creating one epoch from the {self.filterbank.n_new} latest samples"
+            f"Creating one epoch from the {self.filterbank.n_new=} latest samples."
+            f" Using {self.curr_offset_nsamples=} and {x.shape=}"
         )
 
-        x = x[
-            -(
-                self.filterbank.n_new + self.curr_offset_nsamples
-            ) : -self.curr_offset_nsamples,
-            :,
-            0,
-        ]
+        selection_slice = slice(
+            len(x) - (self.filterbank.n_new + self.curr_offset_nsamples),
+            len(x) - self.curr_offset_nsamples,
+        )
+        x = x[selection_slice, :, 0]
         x = x.T[None, :, :]  # (1, n_channel, n_times)
 
         if np.isnan(x).sum() > 0:
@@ -267,113 +305,71 @@ class OnlineDecoder:
 
         if self.classifier_input_sfreq is not None:
             logger.debug(f"Resampling to {self.classifier_input_sfreq} Hz")
-            up = self.input_sfreq / self.classifier_input_sfreq
-            x = resample(x.astype("float64"), up=up, axis=-1).astype("float32")
+            down = self.input_sfreq / self.classifier_input_sfreq
+            x = resample(x.astype("float64"), down=down, axis=-1).astype("float32")
             if np.isnan(x).sum() > 0:
                 logger.error("NaNs found after resampling")
 
         return x
 
+    def check_if_decoding_should_start(self):
+        if self.input_mrk_sw is None:
+            logger.error(
+                "No marker stream connected, cannot start decoding based on markers"
+            )
+
+        if self.input_mrk_sw.n_new > 0:
+            markers = self.input_mrk_sw.unfold_buffer()[-self.input_mrk_sw.n_new :, 0]
+            if self.start_eval_marker in markers:
+                logger.debug(
+                    f"Starting decoding based on marker {self.start_eval_marker}"
+                )
+                self.is_decoding = True
+                self.start_eval_time = time.time()
+
+                # reset the buffers
+                self.input_sw.n_new = self.pre_eval_start_n
+                self.filterbank.n_new = self.pre_eval_start_n
+                self.input_mrk_sw.n_new = 0
+
     def update(self):
 
-        # Update all StreamWatchers
-        for sw in self.input_sws:
-            sw.update()
-
-        # Enough new data -> evaluate classifier
-        if self.enough_data_for_next_prediction():
-
-            self._filter()
-
-            x = self._create_epochs()
-
-            # This reflects the current ordering, consider resampling on raw
-            # after indeces for epochs are set
-            xs = self._resample(x)
-
-            self._classify(xs)
-
-            # reset the counters of the StreamWatchers and the FilterBank
-            for sw in self.input_sws:
-                sw.n_new = 0
-            self.filterbank.n_new = 0
-
-    def _create_epochs_markers(self) -> NDArray | int:
-        # logger.debug(f"Loading latest markers")
+        self.input_sw.update()
         self.input_mrk_sw.update()
-        if self.input_mrk_sw.n_new == 0:
-            # logger.debug("Skipping epoching because no new markers")
-            return 0
-        markers = self.input_mrk_sw.unfold_buffer()[
-            -self.input_mrk_sw.n_new :, 0
-        ]  # assumes only one channel
-        # starts or the epochs in seconds:
-        markers_t = (
-            self.input_mrk_sw.unfold_buffer_t()[-self.input_mrk_sw.n_new :]
-            + self.offset_nsamples
-        )
-        # mask for desired markers:
-        if self.markers is None:
-            desired = np.ones_like(markers, dtype=bool)
+
+        # check if decoding should start
+        if not self.is_decoding:
+            self.check_if_decoding_should_start()
+
         else:
-            desired = np.isin(markers, self.markers)
-        if desired.sum() == 0:
-            # logger.debug("No new markers")
-            return 0
+            if time.time() - self.start_eval_time > self.max_eval_time_s:
+                logger.info("Stopping decoding after max_eval_time_s")
+                self.is_decoding = False
 
-        # logger.debug(f"Loading the latest data time stamps")
-        t = self.filterbank.ring_buffer.unfold_buffer_t()[-self.filterbank.n_new :]
-        starts = np.abs(markers_t[:, None] - t).argmin(axis=1)
+            else:
+                # Do the regular decoding if enough data received
+                # Enough new data -> evaluate classifier
+                if self.enough_data_for_next_prediction() and self.is_decoding:
 
-        # compute masks
-        n_times = int(self.input_window_seconds * self.input_sfreq)
-        missed = starts == 0
-        to_wait = starts + n_times > len(t)
-        to_process = ~missed & ~to_wait
-        n_missed = missed.sum()
-        n_to_wait = to_wait.sum()
-        n_to_process = to_process[desired].sum()
-        self.input_mrk_sw.n_new = n_to_wait
+                    self._filter()
 
-        if n_missed > 0:
-            logger.error(
-                f"{n_missed} events could not be embedded "
-                f"because t_sleep_s or processing time too long."
-            )
-        if missed[n_missed:].any() or to_wait[:-n_to_wait].any():
-            logger.error(
-                "Shuffled time stamps found in the markers stream. "
-                "This case is not handled."
-            )
-        if n_to_process == 0:
-            # logger.debug("No events can be epoched")
-            return 0
+                    x = self._create_epoch()
 
-        logger.debug("Loading the latest data samples")
-        x = self.filterbank.get_data()[:, 1:33, 0]
-        assert len(t) == x.shape[0]
-        logger.debug(
-            f"Epoching {n_to_process} events ({markers[desired & to_process]}) "
-            f"of {n_times} samples each"
-        )
-        x = np.stack(
-            [x[start : start + n_times, :].T for start in starts[desired & to_process]],
-            axis=0,
-            dtype=np.float32,
-        )
-        return x
+                    xs = self._resample(
+                        x
+                    )  # required to align with codes for rCCA classifier
+
+                    self._classify(xs)
 
     def _classify(self, x: NDArray):  # (batch_size, n_channel, n_times)
 
-        logger.debug(f"Computing {x.shape[0]} embedding(s)")
+        logger.debug(f"Classifying for {x.shape=}")
         y = self.classifier.predict(x)[0]
         if np.isnan(y).sum() > 0:
             logger.error("NaNs found after embedding")
 
-        # adding 1 to distinguish prediction "0" from empty stream
-        pred = [y[0] + 1]
-        logger.info(f"Pushing prediction {pred[0]}")
-        self.output_sw.push_sample(pred)
+        logger.debug(f"Pushing prediction {y}")
+        self.output_sw.push_sample([y])
 
     def _run_loop(self, stop_event: threading.Event):
 
@@ -404,18 +400,21 @@ def online_decoder_factory(config_path: Path = Path("./configs/decoder.toml")):
     cfg = toml.load(config_path)
 
     classifier = joblib.load(cfg["online"]["classifier"]["file"])
+    classifier_meta = json.load(open(cfg["online"]["classifier"]["meta_file"], "r"))
 
     online_dec = OnlineDecoder(
         classifier,
+        classifier_meta=classifier_meta,
         input_stream_name=cfg["online"]["input"]["lsl_stream_name"],
         output_stream_name=cfg["online"]["output"]["lsl_stream_name"],
-        input_window_seconds=cfg["online"]["input"]["buffer_size_s"],
-        band=cfg["online"]["classifier"].get("band", [0.5, 40]),
-        eval_after_type=cfg["online"]["eval"][
-            "eval_after_type"
-        ],  # this si required from a config
+        marker_stream_name=cfg["online"]["input"]["lsl_marker_stream_name"],
+        input_buffer_size_s=cfg["online"]["input"]["buffer_size_s"],
+        start_eval_marker=cfg["online"]["eval"]["start"]["marker"],
+        eval_after_type=cfg["online"]["eval"]["eval_after_type"],
         eval_after_s=cfg["online"]["eval"].get("eval_after_s", 1),
         eval_after_nsamples=cfg["online"]["eval"].get("eval_after_nsamples", 1),
+        pre_eval_start_s=cfg["online"]["eval"]["start"]["pre_eval_start_s"],
+        max_eval_time_s=cfg["online"]["eval"]["start"]["max_time_s"],
     )
 
     return online_dec
