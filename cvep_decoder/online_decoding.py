@@ -9,8 +9,10 @@ import numpy as np
 import pylsl
 import toml
 from dareplane_utils.general.time import sleep_s
+from dareplane_utils.logging.logger import get_logger
 from dareplane_utils.signal_processing.filtering import FilterBank
 from dareplane_utils.stream_watcher.lsl_stream_watcher import StreamWatcher
+from fire import Fire
 from mne.filter import resample
 from numpy.typing import NDArray
 from pyntbci.classifiers import rCCA
@@ -292,6 +294,7 @@ class OnlineDecoder:
                 self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :],
             )
 
+            logger.debug(f"Added {self.input_sw.n_new=} samples")
             self.input_sw.n_new = 0  # reset to ensure only additional data gets filled onto the filterbank
 
     def _create_epoch(self) -> NDArray:
@@ -353,8 +356,13 @@ class OnlineDecoder:
                 self.start_eval_time = time.time()
 
                 # reset the buffers
+                logger.debug(
+                    f"Resetting buffers for decoding - using {self.pre_eval_start_n=}"
+                )
+                # Important note: only keep the lookback in the raw data,
+                # the filterbank will be populated during the loop
                 self.input_sw.n_new = self.pre_eval_start_n
-                self.filterbank.n_new = self.pre_eval_start_n
+                self.filterbank.n_new = 0
                 self.input_mrk_sw.n_new = 0
 
     def update(self):
@@ -408,7 +416,10 @@ class OnlineDecoder:
             t_end = pylsl.local_clock()
 
             # reduce sleep by processing time
-            sleep_s(self.t_sleep_s - (t_end - t_start))
+            dt_sleep = self.t_sleep_s - (t_end - t_start)
+            # logger.debug(f"Sleeping for {dt_sleep=}")
+            sleep_s(dt_sleep)
+            # logger.debug("Woke up from sleep")
 
     def run(self) -> tuple[threading.Thread, threading.Event]:
         stop_event = threading.Event()
@@ -444,3 +455,21 @@ def online_decoder_factory(config_path: Path = Path("./configs/decoder.toml")):
     )
 
     return online_dec
+
+
+def cli_run_decoder(
+    conf_pth: Path = Path("./configs/decoder.toml"), log_level: int = 30
+):
+    # if the CLI is run, we most likely also want a console output
+    logger = get_logger("cvep_decoder", add_console_handler=True)
+    logger.setLevel(log_level)
+
+    logger.debug(f"Starting the decoder with {conf_pth=}")
+    online_dec = online_decoder_factory(conf_pth)
+    online_dec.init_all()
+    thread, stop_event = online_dec.run()
+    return thread, stop_event
+
+
+if __name__ == "__main__":
+    Fire(cli_run_decoder)
