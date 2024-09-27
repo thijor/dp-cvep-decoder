@@ -7,12 +7,49 @@ data_root = './data/'
 training_files_glob = 'sub-P001_*.xdf'   # looked up in data_root
 out_file = './test.joblib'
 out_file_meta = './test_meta.json'
-codes_file = '../ThesisSpellerProject/dp-cvep-speller/speller/codes/mgold_61_6521.npz'
+codes_file = '../ThesisSpellerProject/dp-speller/speller/codes/mgold_61_6521.npz'
 
 [training.features]
+tmin_s = 0.0
+tmax_s = 4.2
 target_freq_hz = 120                     # should be aligned with codes for rCCA
 passband_hz = [1, 40]
+data_stream_name = 'BioSemi'
+marker_stream_name = 'KeyboardMarkerStream'
 # selected_channels = ['C3', 'Cz', 'C4']   # If provided, only the mne.io.RawArray object will be filtered for these channels 
+selected_channels = [
+ 'A1',
+ 'A2',
+ 'A3',
+ 'A4',
+ 'A5',
+ 'A6',
+ 'A7',
+ 'A8',
+ 'A9',
+ 'A10',
+ 'A11',
+ 'A12',
+ 'A13',
+ 'A14',
+ 'A15',
+ 'A16',
+ 'A17',
+ 'A18',
+ 'A19',
+ 'A20',
+ 'A21',
+ 'A22',
+ 'A23',
+ 'A24',
+ 'A25',
+ 'A26',
+ 'A27',
+ 'A28',
+ 'A29',
+ 'A30',
+ 'A31',
+ 'A32']
 
 [online]
 sleep_s = 0.1                            # time between updates in seconds
