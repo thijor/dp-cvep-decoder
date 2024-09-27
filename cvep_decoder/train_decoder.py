@@ -1,63 +1,86 @@
 import json
 import os
 import pickle
-import time
+from dataclasses import dataclass
+from pathlib import Path
 
 import mne
 import numpy as np
 import pyntbci
 import pyxdf
 from dareplane_utils.signal_processing.filtering import FilterBank
-from decoder.signal_controller import SignalEmbedder
-from decoder.utils.logging import logger
 from mnelab.io import read_raw
-from scipy.signal import butter, resample, sosfilt
+
+from cvep_decoder.utils.logging import logger
 
 # from ...dp-speller.speller.speller import TRIAL_TIME, PR, CODE # Imports from another module? probably not the DarePlane way? Another way of ensuring important values such a s trial_time and stimulus presentation are correct?
 
-data_path = "./data/training data"
+data_path = Path("./data/training data/sub-P001_ses-S001_task-cvep_run-001_eeg.xdf")
 classifier_path = "./data/classifiers"
-task = "cvep"
-
-TRIAL_TIME = 4.2
-PR = 60
-CODE = "mgold_61_6521"
 
 
-tmin = 0.0  # start of trial [s]
-tmax = TRIAL_TIME  # length of a trial [s]
-l_freq = 2.0  # high pass cutoff frequency [Hz]
-h_freq = 30.0  # low pass cutoff frequency [Hz]
-n_channels = 32  # number of channels
-fs = 120  # target sampling frequency to downsample to [Hz]
-pr = PR  # stimulus presentation rate [Hz]
-window = 1.0  # window of data to take before a trial to catch filter artefacts [s]
+@dataclass
+class ClassifierMeta:
+    tmin: float = 0.0
+    tmax: float = 4.2
+    fband: tuple[float, float] = (2.0, 30.0)
+    n_channels = 32
+    sfreq: float = 120
+    frame_rate: float = 60
+    pre_trial_window_s: float = 1.0
+    code: str = "mgold_61_6521"
+    selected_channels: list[str] | None = None
 
 
-def create_classifier(subject, session, run):
-    logger.setLevel(10)
+def load_raw_and_events(
+    fpath: Path,
+    data_stream_name: str = "BioSemi",
+    marker_stream_name: str = "KeyboardMarkerStream",
+) -> tuple[mne.io.RawArray, np.ndarray]:
 
     # Load EEG
-    fn = os.path.join(
-        data_path, f"sub-{subject}_ses-{session}_task-{task}_run-{run}_eeg.xdf"
-    )
-    streams = pyxdf.resolve_streams(fn)
+    data, _ = pyxdf.load_xdf(fpath)
+    streams = pyxdf.resolve_streams(fpath)
     names = [stream["name"] for stream in streams]
-    raw = read_raw(fn, stream_ids=[streams[names.index("BioSemi")]["stream_id"]])
+    raw = read_raw(
+        fpath, stream_ids=[streams[names.index(data_stream_name)]["stream_id"]]
+    )
 
-    # Adjust marker channel data
-    raw._data[0, :] -= np.min(raw._data[0, :])
-    raw._data[0, raw._data[0, :] > 0] = 1
-    idx = np.where(raw._data[0, :] > 0)[0]
-    idx = idx[np.concatenate(([False], np.diff(idx) < raw.info["sfreq"]))]
-    raw._data[0, idx] = 0
+    # Align events to the closest time stamp in the data
+    evd = data[names.index(marker_stream_name)]
+    raw_ts = data[names.index(data_stream_name)]["time_stamps"]
+    idx_in_raw = [np.argmin(np.abs(raw_ts - ts)) for ts in evd["time_stamps"]]
+    events = np.vstack(
+        [idx_in_raw, [e[0] for e in evd["time_series"]]], dtype="object"
+    ).T
 
-    # Read events
-    events = mne.find_events(raw, stim_channel="Trig1", verbose=False)
+    return raw, events
+
+
+def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
+    return ClassifierMeta(
+        tmin=cfg["tmin"],
+        tmax=cfg["tmax"],
+        fband=cfg["training"]["passband_hz"],
+        n_channels=cfg["n_channels"],
+        sfreq=cfg["training"]["target_freq_hz"],
+        frame_rate=cfg["frame_rate"],
+        selected_channels=cfg["training"]["features"].get("selected_channels", None),
+    )
+
+
+def create_classifier(cfg: dict):
+    logger.setLevel(10)
+    cmeta = classifier_meta_from_cfg(cfg)
+
+    raw, events = load_raw_and_events(data_path)
+    selected_channels = cmeta.selected_channels
+    if selected_channels is not None:
+        raw.pick_channels(selected_channels)
 
     # create filterbank
     fb = FilterBank(
-        bands={"band": (l_freq, h_freq)},
+        bands={"band": cmeta.fband},
         sfreq=raw.info["sfreq"],
         output="signal",
         n_in_channels=len(raw.info["ch_names"]),
@@ -65,7 +88,6 @@ def create_classifier(subject, session, run):
         filter_buffer_s=raw.times[-1],
     )
 
-    # data = raw.get_data()[1:33, :].T
     data = raw.get_data().T
 
     fb.filter(data, raw.times)
@@ -73,46 +95,24 @@ def create_classifier(subject, session, run):
     data_filtered = fb.get_data()
     raw_f = mne.io.RawArray(data_filtered.T[0], raw.info)
 
-    # Slicing
-    # X = mne.Epochs(raw, events=events, tmin=tmin - window, tmax=tmax, baseline=None, picks="eeg", preload=True,
-    #               verbose=False).get_data(copy=True, verbose=False)
-    # logger.info(f"X shape: {X.shape} (trials x channels x samples)")
-
-    # Spectral filtering
-    # sos = butter(N=2, Wn=[l_freq, h_freq], btype='bandpass', output='sos', fs=raw.info["sfreq"])
-    # X = sosfilt(sos, X, axis=2)
-
-    # Resampling
-    # X = resample(X, int(np.round(X.shape[2] / raw.info["sfreq"] * fs)), axis=2)
-
-    # Remove 500 ms around
-    # X = X[:, :, int(window * fs):]
-    # logger.info(f"X shape: {X.shape} (trials x channels x samples)")
-    # raw.filter(l_freq=l_freq, h_freq=h_freq)
+    epo_start_events = {}
 
     epo = mne.Epochs(
         raw_f,
         events=events,
-        tmin=tmin - window,
-        tmax=tmax,
+        tmin=cmeta.tmin - cmeta.pre_trial_window_s,
+        tmax=cmeta.tmax,
         baseline=None,
         picks="eeg",
         preload=True,
         verbose=False,
     )
     # need resampling?
-    epo.resample(fs)
-    X = epo.get_data(tmin=tmin, tmax=tmax)
+    epo.resample(cmeta.sfreq)
+    X = epo.get_data(tmin=cmeta.tmin, tmax=cmeta.tmax)
 
     logger.info(f"X shape: {X.shape} (trials x channels x samples)")
 
-    # Extract target labels
-    fn = os.path.join(
-        data_path, f"sub-{subject}_ses-{session}_task-{task}_run-{run}_eeg.xdf"
-    )
-    streams = pyxdf.load_xdf(fn)[0]
-    names = [stream["info"]["name"][0] for stream in streams]
-    stream = streams[names.index("KeyboardMarkerStream")]
     y = []
     for marker in stream["time_series"]:
         try:
@@ -121,74 +121,51 @@ def create_classifier(subject, session, run):
                 y.append(int(marker["target"]))
         except:
             continue
+
     y = np.array(y)
     logger.info(f"y shape: {y.shape} (trials)")
 
     # Load codes
-    V = np.repeat(
-        np.load(
-            f"D:/Users/bci/bachelor_project_s1028931/ThesisSpellerProject/dp-speller/speller/codes/{CODE}.npz"
-        )["codes"].T,
-        int(fs / pr),
-        axis=1,
-    )
     logger.info(f"V shape: {V.shape} (codes x samples)")
 
     V = np.repeat(
-        np.load(f"../ThesisSpellerProject/dp-speller/speller/codes/mgold_61_6521.npz")[
-            "codes"
-        ].T,
-        int(fs / pr),
+        np.load(cfg["training"]["codes_file"])["codes"].T,
+        int(cmeta.sfreq / cmeta.frame_rate),
         axis=1,
     )
 
-    # Cross-validation
-    n_folds = 4
-    n_trials = X.shape[0]
-    folds = np.repeat(np.arange(n_folds), int(n_trials / n_folds))
-    accuracy = np.zeros(n_folds)
     rcca = pyntbci.classifiers.rCCA(
         stimulus=V, fs=fs, event="duration", encoding_length=0.3, onset_event=True
     )
-    for i_fold in range(n_folds):
-        X_trn, y_trn = X[i_fold != folds, :, :], y[i_fold != folds]
-        X_tst, y_tst = X[i_fold == folds, :, :], y[i_fold == folds]
 
-        rcca.fit(X_trn, y_trn)
+    # Cross-validation
+    acc = calc_cv_accuracy(rcca, X, y)
+    logger.info(f"Classifier created with accuracy: {acc.mean():.3f}")
 
-        yh = rcca.predict(X_tst)[:, 0]
-        # print(yh)
-        # print(y_tst)
-        accuracy[i_fold] = np.mean(yh == y_tst)
-
+    # Full fit for the online use
     rcca.fit(X, y)
 
-    logger.info(f"Classifier created with accuracy: {accuracy.mean():.3f}")
-    class_loc = os.path.join(
-        classifier_path, f"rCCA_Classifier_sub-{subject}_ses-{session}.pkl"
-    )
-    with open(class_loc, "wb") as file:
+    out_file = cfg["training"]["out_file"]
+    out_file_meta = cfg["training"]["out_file_meta"]
+    with open(out_file, "wb") as file:
         pickle.dump(rcca, file)
-    logger.info(f"Classifier saved to {class_loc}")
+    logger.info(f"Classifier saved to {out_file}, meta data saved to {out_file_meta}")
 
     return 0
 
 
-def decode(subject, session):
-    class_loc = os.path.join(
-        classifier_path, f"rCCA_Classifier_sub-{subject}_ses-{session}.pkl"
-    )
-    with open(class_loc, "rb") as file:
-        classifier = pickle.load(file)
-    decoder = SignalEmbedder(
-        classifier=classifier,
-        input_stream_name="BioSemi",
-        output_stream_name="decoder",
-        input_window_seconds=tmax,
-        new_sfreq=fs,
-        band=(l_freq, h_freq),
-        marker_stream_name="KeyboardMarkerStream",
-        markers="start_trial",
-    )
-    decoder.init_all()
-    return decoder.run()
+def calc_cv_accuracy(
+    rcca: pyntbci.classifiers.rCCA, X: np.ndarray, y: np.ndarray, n_folds: int = 4
+) -> np.ndarray:
+    n_folds = 4
+    n_trials = X.shape[0]
+    folds = np.repeat(np.arange(n_folds), int(n_trials / n_folds))
+    accuracy = np.zeros(n_folds)
+    for i_fold in range(n_folds):
+        X_trn, y_trn = X[i_fold != folds, :, :], y[i_fold != folds]
+        X_tst, y_tst = X[i_fold == folds, :, :], y[i_fold == folds]
+        rcca.fit(X_trn, y_trn)
+        # TODO: Ask Jordy if rcca.fit would always create a new/fresh classifier? I always make deep copies in CV to ensure fresh setups.
+        yh = rcca.predict(X_tst)[:, 0]
+        accuracy[i_fold] = np.mean(yh == y_tst)
+    return accuracy

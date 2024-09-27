@@ -1,15 +1,18 @@
 [cvep]
 code_file = './'                         # path to file containing the cvep codes
+frame_rate_hz = 60                       # frame rate of the cvep stimulation
 
 [training]
 data_root = './data/'
 training_files_glob = 'sub-P001_*.xdf'   # looked up in data_root
 out_file = './test.joblib'
 out_file_meta = './test_meta.json'
+codes_file = '../ThesisSpellerProject/dp-cvep-speller/speller/codes/mgold_61_6521.npz'
 
 [training.features]
 target_freq_hz = 120                     # should be aligned with codes for rCCA
 passband_hz = [1, 40]
+# selected_channels = ['C3', 'Cz', 'C4']   # If provided, only the mne.io.RawArray object will be filtered for these channels 
 
 [online]
 sleep_s = 0.1                            # time between updates in seconds
