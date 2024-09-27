@@ -1,19 +1,19 @@
 import json
 import os
 import pickle
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import mne
+import joblib
 import numpy as np
 import pyntbci
 import pyxdf
+from dareplane_utils.logging.logger import get_logger
 from dareplane_utils.signal_processing.filtering import FilterBank
-from mnelab.io import read_raw
+from scipy.signal import resample
 
 from cvep_decoder.utils.logging import logger
-
-# from ...dp-speller.speller.speller import TRIAL_TIME, PR, CODE # Imports from another module? probably not the DarePlane way? Another way of ensuring important values such a s trial_time and stimulus presentation are correct?
 
 data_path = Path("./data/training data/sub-P001_ses-S001_task-cvep_run-001_eeg.xdf")
 classifier_path = "./data/classifiers"
@@ -30,21 +30,25 @@ class ClassifierMeta:
     pre_trial_window_s: float = 1.0
     code: str = "mgold_61_6521"
     selected_channels: list[str] | None = None
+    segment_time_s: float = 0.1
+    event: str = "contrast"
+    onset_event: bool = True
+    encoding_length: float = 0.3
+    target_accuracy: float = 0.95  # used for early stop
 
 
 def load_raw_and_events(
     fpath: Path,
     data_stream_name: str = "BioSemi",
     marker_stream_name: str = "KeyboardMarkerStream",
-) -> tuple[mne.io.RawArray, np.ndarray]:
+    selected_channels: list[str] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
 
     # Load EEG
     data, _ = pyxdf.load_xdf(fpath)
     streams = pyxdf.resolve_streams(fpath)
     names = [stream["name"] for stream in streams]
-    raw = read_raw(
-        fpath, stream_ids=[streams[names.index(data_stream_name)]["stream_id"]]
-    )
+    x = data[names.index(data_stream_name)]["time_series"]
 
     # Align events to the closest time stamp in the data
     evd = data[names.index(marker_stream_name)]
@@ -54,79 +58,74 @@ def load_raw_and_events(
         [idx_in_raw, [e[0] for e in evd["time_series"]]], dtype="object"
     ).T
 
-    return raw, events
+    # select channels if specified
+    if selected_channels is not None:
+        ch_names = [
+            ch["label"][0]
+            for ch in data[names.index(data_stream_name)]["info"]["desc"][0][
+                "channels"
+            ][0]["channel"]
+        ]
+        idx = [ch_names.index(ch) for ch in selected_channels]
+        x = x[:, idx]
+
+    return x, events
 
 
 def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
     return ClassifierMeta(
-        tmin=cfg["tmin"],
-        tmax=cfg["tmax"],
-        fband=cfg["training"]["passband_hz"],
-        n_channels=cfg["n_channels"],
-        sfreq=cfg["training"]["target_freq_hz"],
-        frame_rate=cfg["frame_rate"],
+        tmin=cfg["training"]["features"]["tmin_s"],
+        tmax=cfg["training"]["features"]["tmax_s"],
+        fband=cfg["training"]["features"]["passband_hz"],
+        sfreq=cfg["training"]["features"]["target_freq_hz"],
+        frame_rate=cfg["cvep"]["frame_rate_hz"],
         selected_channels=cfg["training"]["features"].get("selected_channels", None),
     )
 
 
 def create_classifier(cfg: dict):
     logger.setLevel(10)
+    import toml
+
+    cfg = toml.load("./configs/decoder.toml")
     cmeta = classifier_meta_from_cfg(cfg)
 
-    raw, events = load_raw_and_events(data_path)
-    selected_channels = cmeta.selected_channels
-    if selected_channels is not None:
-        raw.pick_channels(selected_channels)
+    x, events = load_raw_and_events(
+        data_path,
+        data_stream_name=cfg["training"]["features"]["data_stream_name"],
+        marker_stream_name=cfg["training"]["features"]["marker_stream_name"],
+        selected_channels=cfg["training"]["features"].get("selected_channels", None),
+    )
 
     # create filterbank
     fb = FilterBank(
         bands={"band": cmeta.fband},
-        sfreq=raw.info["sfreq"],
+        sfreq=cmeta.sfreq,
         output="signal",
-        n_in_channels=len(raw.info["ch_names"]),
-        # n_in_channels=n_channels,
-        filter_buffer_s=raw.times[-1],
+        n_in_channels=x.shape[1],
+        filter_buffer_s=np.ceil(x.shape[0] / cmeta.sfreq),
     )
 
-    data = raw.get_data().T
+    fb.filter(x, np.arange(x.shape[0]) / cmeta.sfreq)
 
-    fb.filter(data, raw.times)
+    xf = fb.get_data()[:, :, 0]
 
-    data_filtered = fb.get_data()
-    raw_f = mne.io.RawArray(data_filtered.T[0], raw.info)
+    # Slice data to trials
+    epo_events = events[events[:, 1] == "start_trial"]
+    n_pre = int(cmeta.tmin * cmeta.sfreq)
+    n_post = int(cmeta.tmax * cmeta.sfreq)
 
-    epo_start_events = {}
+    epo_list = [
+        e[: (n_post + n_pre), :]  # slice epochs to correct lenght
+        for e in np.split(xf, epo_events[:, 0] - n_pre)[1:]
+    ]
+    X = np.asarray(epo_list).transpose(0, 2, 1)
 
-    epo = mne.Epochs(
-        raw_f,
-        events=events,
-        tmin=cmeta.tmin - cmeta.pre_trial_window_s,
-        tmax=cmeta.tmax,
-        baseline=None,
-        picks="eeg",
-        preload=True,
-        verbose=False,
-    )
-    # need resampling?
-    epo.resample(cmeta.sfreq)
-    X = epo.get_data(tmin=cmeta.tmin, tmax=cmeta.tmax)
+    logger.debug(f"The training data is of shape {X.shape} before resample")
 
-    logger.info(f"X shape: {X.shape} (trials x channels x samples)")
-
-    y = []
-    for marker in stream["time_series"]:
-        try:
-            marker = json.loads(marker[0])
-            if isinstance(marker, dict) and "target" in marker:
-                y.append(int(marker["target"]))
-        except:
-            continue
-
-    y = np.array(y)
-    logger.info(f"y shape: {y.shape} (trials)")
-
-    # Load codes
-    logger.info(f"V shape: {V.shape} (codes x samples)")
+    # Resample
+    X = resample(X, num=int(n_pre + n_post), axis=2)
+    logger.debug(f"The training data is of shape {X.shape} after resample")
 
     V = np.repeat(
         np.load(cfg["training"]["codes_file"])["codes"].T,
@@ -134,38 +133,115 @@ def create_classifier(cfg: dict):
         axis=1,
     )
 
+    logger.info(f"V shape: {V.shape} (codes x samples)")
+
+    y = np.array(
+        [
+            int(re.search(r'"target": (\d*)', e[1]).group(1))
+            for e in events
+            if '"target"' in e[1]
+        ]
+    )
     rcca = pyntbci.classifiers.rCCA(
-        stimulus=V, fs=fs, event="duration", encoding_length=0.3, onset_event=True
+        stimulus=V,
+        fs=cmeta.sfreq,
+        event="duration",
+        encoding_length=cmeta.encoding_length,
+        onset_event=True,
     )
 
     # Cross-validation
-    acc = calc_cv_accuracy(rcca, X, y)
-    logger.info(f"Classifier created with accuracy: {acc.mean():.3f}")
+    acc = calc_cv_accuracy(rcca, cmeta, V, X, y)
 
     # Full fit for the online use
     rcca.fit(X, y)
 
     out_file = cfg["training"]["out_file"]
     out_file_meta = cfg["training"]["out_file_meta"]
-    with open(out_file, "wb") as file:
-        pickle.dump(rcca, file)
+
+    joblib.save(rcca, out_file)
+    # json.dump(ClassifierMeta, out_file_meta)  # TODO: Fix storing the meta
     logger.info(f"Classifier saved to {out_file}, meta data saved to {out_file_meta}")
 
     return 0
 
 
 def calc_cv_accuracy(
-    rcca: pyntbci.classifiers.rCCA, X: np.ndarray, y: np.ndarray, n_folds: int = 4
+    rcca: pyntbci.classifiers.rCCA,
+    cmeta: ClassifierMeta,
+    V: np.ndarray,
+    X: np.ndarray,
+    y: np.ndarray,
+    n_folds: int = 4,
 ) -> np.ndarray:
-    n_folds = 4
+
     n_trials = X.shape[0]
     folds = np.repeat(np.arange(n_folds), int(n_trials / n_folds))
     accuracy = np.zeros(n_folds)
+
+    # Setup classifier
+    rcca = pyntbci.classifiers.rCCA(
+        stimulus=V,
+        fs=cmeta.sfreq,
+        event=cmeta.event,
+        onset_event=True,
+        encoding_length=cmeta.encoding_length,
+    )
+    stop = pyntbci.stopping.MarginStopping(
+        estimator=rcca,
+        segment_time=cmeta.segment_time_s,
+        fs=cmeta.sfreq,
+        target_p=cmeta.target_accuracy,
+    )
+
+    # Cross-validation
+    folds = np.repeat(np.arange(n_folds), int(X.shape[0] / n_folds))
+    accuracy = np.zeros(n_folds)
+    duration = np.zeros(n_folds)
     for i_fold in range(n_folds):
+
+        # Split folds
         X_trn, y_trn = X[i_fold != folds, :, :], y[i_fold != folds]
         X_tst, y_tst = X[i_fold == folds, :, :], y[i_fold == folds]
-        rcca.fit(X_trn, y_trn)
-        # TODO: Ask Jordy if rcca.fit would always create a new/fresh classifier? I always make deep copies in CV to ensure fresh setups.
-        yh = rcca.predict(X_tst)[:, 0]
-        accuracy[i_fold] = np.mean(yh == y_tst)
+
+        # Train classifier and stopping
+        stop.fit(X_trn, y_trn)
+
+        # Loop trials
+        yh_tst = np.zeros(y_tst.size)
+        yh_dur = np.zeros(y_tst.size)
+        for i_trial in range(y_tst.size):
+            X_i = X_tst[[i_trial], :, :]
+
+            # Loop segments
+            for i_segment in range(
+                int(X.shape[2] / (cmeta.segment_time_s * cmeta.sfreq))
+            ):
+
+                # Apply classifier
+                label = stop.predict(
+                    X_i[
+                        :,
+                        :,
+                        : int((1 + i_segment) * cmeta.segment_time_s * cmeta.sfreq),
+                    ]
+                )[0]
+
+                # Stop the trial if classified
+                if label >= 0:
+                    yh_tst[i_trial] = label
+                    yh_dur[i_trial] = (1 + i_segment) * cmeta.segment_time_s
+                    break
+
+        # Compute performance
+        accuracy[i_fold] = np.mean(yh_tst == y_tst)
+        duration[i_fold] = np.mean(yh_dur)
+
+    logger.info(
+        f"Cross-validated accuracy of {np.mean(accuracy):.3f} +/- {np.std(accuracy):.3f}"
+    )
+    logger.info(
+        f"Cross-validated duration of {np.mean(duration):.2f} +/- {np.std(duration):.2f}"
+    )
+
     return accuracy
