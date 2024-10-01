@@ -4,7 +4,7 @@ frame_rate_hz = 60                       # frame rate of the cvep stimulation
 
 [training]
 data_root = './data/'
-training_files_glob = 'sub-P001_*.xdf'   # looked up in data_root
+training_files_glob = 'sub-P001_ses-S001*.xdf'   # looked up in data_root
 out_file = './test.joblib'
 out_file_meta = './test_meta.json'
 codes_file = '../ThesisSpellerProject/dp-speller/speller/codes/mgold_61_6521.npz'

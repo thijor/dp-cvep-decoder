@@ -9,14 +9,12 @@ import joblib
 import numpy as np
 import pyntbci
 import pyxdf
+import toml
 from dareplane_utils.logging.logger import get_logger
 from dareplane_utils.signal_processing.filtering import FilterBank
 from scipy.signal import resample
 
 from cvep_decoder.utils.logging import logger
-
-data_path = Path("./data/training data/sub-P001_ses-S001_task-cvep_run-001_eeg.xdf")
-classifier_path = "./data/classifiers"
 
 
 @dataclass
@@ -42,7 +40,7 @@ def load_raw_and_events(
     data_stream_name: str = "BioSemi",
     marker_stream_name: str = "KeyboardMarkerStream",
     selected_channels: list[str] | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, float]:
 
     # Load EEG
     data, _ = pyxdf.load_xdf(fpath)
@@ -68,8 +66,9 @@ def load_raw_and_events(
         ]
         idx = [ch_names.index(ch) for ch in selected_channels]
         x = x[:, idx]
+    sfreq = int(data[names.index(data_stream_name)]["info"]["nominal_srate"][0])
 
-    return x, events
+    return x, events, sfreq
 
 
 def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
@@ -83,48 +82,62 @@ def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
     )
 
 
+def get_training_data_files(cfg: dict) -> list[Path]:
+    files = list(
+        Path(cfg["training"]["data_root"]).rglob(cfg["training"]["training_files_glob"])
+    )
+
+    return files
+
+
 def create_classifier(cfg: dict):
     logger.setLevel(10)
-    import toml
 
     cfg = toml.load("./configs/decoder.toml")
     cmeta = classifier_meta_from_cfg(cfg)
 
-    x, events = load_raw_and_events(
-        data_path,
-        data_stream_name=cfg["training"]["features"]["data_stream_name"],
-        marker_stream_name=cfg["training"]["features"]["marker_stream_name"],
-        selected_channels=cfg["training"]["features"].get("selected_channels", None),
-    )
+    t_files = get_training_data_files(cfg)
+    epo_list = []
+    for tfile in t_files:
 
-    # create filterbank
-    fb = FilterBank(
-        bands={"band": cmeta.fband},
-        sfreq=cmeta.sfreq,
-        output="signal",
-        n_in_channels=x.shape[1],
-        filter_buffer_s=np.ceil(x.shape[0] / cmeta.sfreq),
-    )
+        x, events, sfreq = load_raw_and_events(
+            fpath=tfile,
+            data_stream_name=cfg["training"]["features"]["data_stream_name"],
+            marker_stream_name=cfg["training"]["features"]["marker_stream_name"],
+            selected_channels=cfg["training"]["features"].get(
+                "selected_channels", None
+            ),
+        )
 
-    fb.filter(x, np.arange(x.shape[0]) / cmeta.sfreq)
+        # create filterbank
+        fb = FilterBank(
+            bands={"band": cmeta.fband},
+            sfreq=cmeta.sfreq,
+            output="signal",
+            n_in_channels=x.shape[1],
+            filter_buffer_s=np.ceil(x.shape[0] / sfreq),
+        )
 
-    xf = fb.get_data()[:, :, 0]
+        fb.filter(x, np.arange(x.shape[0]) / sfreq)
 
-    # Slice data to trials
-    epo_events = events[events[:, 1] == "start_trial"]
-    n_pre = int(cmeta.tmin * cmeta.sfreq)
-    n_post = int(cmeta.tmax * cmeta.sfreq)
+        xf = fb.get_data()[:, :, 0]
 
-    epo_list = [
-        e[: (n_post + n_pre), :]  # slice epochs to correct lenght
-        for e in np.split(xf, epo_events[:, 0] - n_pre)[1:]
-    ]
+        # Slice data to trials
+        epo_events = events[events[:, 1] == "start_trial"]
+        n_pre = int(-1 * cmeta.tmin * sfreq)
+        n_post = int(cmeta.tmax * sfreq)
+
+        epo_list += [
+            e[: (n_post + n_pre), :]  # slice epochs to correct lenght
+            for e in np.split(xf, epo_events[:, 0] - n_pre)[1:]
+        ]
+
     X = np.asarray(epo_list).transpose(0, 2, 1)
 
     logger.debug(f"The training data is of shape {X.shape} before resample")
 
     # Resample
-    X = resample(X, num=int(n_pre + n_post), axis=2)
+    X = resample(X, num=int((cmeta.tmax - cmeta.tmin) * cmeta.sfreq), axis=2)
     logger.debug(f"The training data is of shape {X.shape} after resample")
 
     V = np.repeat(
@@ -142,19 +155,11 @@ def create_classifier(cfg: dict):
             if '"target"' in e[1]
         ]
     )
-    rcca = pyntbci.classifiers.rCCA(
-        stimulus=V,
-        fs=cmeta.sfreq,
-        event="duration",
-        encoding_length=cmeta.encoding_length,
-        onset_event=True,
-    )
+
+    rcca = fit_rcca_model(cmeta, X, y, V)
 
     # Cross-validation
-    acc = calc_cv_accuracy(rcca, cmeta, V, X, y)
-
-    # Full fit for the online use
-    rcca.fit(X, y)
+    acc, dur = calc_cv_accuracy(rcca, cmeta, V, X, y)
 
     out_file = cfg["training"]["out_file"]
     out_file_meta = cfg["training"]["out_file_meta"]
@@ -166,6 +171,20 @@ def create_classifier(cfg: dict):
     return 0
 
 
+def fit_rcca_model(
+    cmeta: dict, X: np.ndarray, y: np.ndarray, V: np.ndarray
+) -> pyntbci.classifiers.rCCA:
+    rcca = pyntbci.classifiers.rCCA(
+        stimulus=V,
+        fs=cmeta.sfreq,
+        event="duration",
+        encoding_length=cmeta.encoding_length,
+        onset_event=True,
+    )
+    rcca.fit(X, y)
+    return rcca
+
+
 def calc_cv_accuracy(
     rcca: pyntbci.classifiers.rCCA,
     cmeta: ClassifierMeta,
@@ -173,11 +192,7 @@ def calc_cv_accuracy(
     X: np.ndarray,
     y: np.ndarray,
     n_folds: int = 4,
-) -> np.ndarray:
-
-    n_trials = X.shape[0]
-    folds = np.repeat(np.arange(n_folds), int(n_trials / n_folds))
-    accuracy = np.zeros(n_folds)
+) -> tuple[np.ndarray, np.ndarray]:
 
     # Setup classifier
     rcca = pyntbci.classifiers.rCCA(
@@ -198,6 +213,7 @@ def calc_cv_accuracy(
     folds = np.repeat(np.arange(n_folds), int(X.shape[0] / n_folds))
     accuracy = np.zeros(n_folds)
     duration = np.zeros(n_folds)
+
     for i_fold in range(n_folds):
 
         # Split folds
@@ -243,5 +259,42 @@ def calc_cv_accuracy(
     logger.info(
         f"Cross-validated duration of {np.mean(duration):.2f} +/- {np.std(duration):.2f}"
     )
+
+    return accuracy, duration
+
+
+def calc_cv_accuracy_no_early_stop(
+    rcca: pyntbci.classifiers.rCCA,
+    cmeta: ClassifierMeta,
+    V: np.ndarray,
+    X: np.ndarray,
+    y: np.ndarray,
+    n_folds: int = 4,
+) -> np.ndarray:
+
+    # Setup classifier
+    rcca = pyntbci.classifiers.rCCA(
+        stimulus=V,
+        fs=cmeta.sfreq,
+        event=cmeta.event,
+        onset_event=True,
+        encoding_length=cmeta.encoding_length,
+    )
+
+    # Cross-validation
+    folds = np.repeat(np.arange(n_folds), int(X.shape[0] / n_folds))
+    accuracy = np.zeros(n_folds)
+    duration = np.zeros(n_folds)
+
+    for i_fold in range(n_folds):
+
+        # Split folds
+        X_trn, y_trn = X[i_fold != folds, :, :], y[i_fold != folds]
+        X_tst, y_tst = X[i_fold == folds, :, :], y[i_fold == folds]
+
+        # Train classifier and stopping
+        rcca.fit(X_trn, y_trn)
+        yh = rcca.predict(X_tst)
+        accuracy[i_fold] = np.mean(yh == y_tst)
 
     return accuracy
