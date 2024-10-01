@@ -90,10 +90,28 @@ def get_training_data_files(cfg: dict) -> list[Path]:
     return files
 
 
-def create_classifier(cfg: dict):
-    logger.setLevel(10)
+# all options beyond cfg are for overwriting the config if necessary
+def create_classifier(
+    cfg: dict,
+    data_root: Path | None = Path("./data"),
+    training_files_glob: str | None = None,
+    out_file: Path | None = None,
+    out_file_meta: Path | None = None,
+) -> int:
 
     cfg = toml.load("./configs/decoder.toml")
+    # Apply overwrites
+    if data_root is not None:
+        cfg["training"]["data_root"] = data_root
+    if training_files_glob is not None:
+        cfg["training"]["training_files_glob"] = training_files_glob
+    if out_file is not None:
+        cfg["training"]["out_file"] = out_file
+    if out_file_meta is not None:
+        cfg["training"]["out_file_meta"] = out_file_meta
+
+    logger.setLevel(10)
+
     cmeta = classifier_meta_from_cfg(cfg)
 
     t_files = get_training_data_files(cfg)
