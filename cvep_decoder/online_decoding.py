@@ -16,6 +16,7 @@ from fire import Fire
 from mne.filter import resample
 from numpy.typing import NDArray
 from pyntbci.classifiers import rCCA
+from pyntbci.stopping import MarginStopping
 
 from cvep_decoder.utils.logging import logger
 
@@ -26,7 +27,8 @@ class OnlineDecoder:
     Parameters
     ----------
     classifier : rcca
-        classifier object to use for decoding
+        classifier object to use for decoding. Either a `rCCA` or a `MarginStopping` object from pyntbci.
+        The MarginStopping is used in combination with the dp-cvep-speller
 
     classifier_meta: dict
         Dictionary with metadata about the classifier. Should contain:
@@ -87,7 +89,7 @@ class OnlineDecoder:
 
     def __init__(
         self,
-        classifier: rCCA,
+        classifier: rCCA | ,
         classifier_meta: dict,
         input_stream_name: str,
         marker_stream_name: str,
@@ -151,6 +153,8 @@ class OnlineDecoder:
         }
 
         self.enough_data_for_next_prediction = eval_type_map[eval_after_type]
+
+        self.classify = self._classify_early_stopping if isinstance(classifier, MarginStopping) else self._classify
 
     # -------- Connection and initialization methods --------------------------
     def connect_input_streams(self):
@@ -389,8 +393,9 @@ class OnlineDecoder:
                         x
                     )  # required to align with codes for rCCA classifier
 
-                    self._classify(xs)
+                    self.classify(xs)
 
+    # the plain classifier that provides a class for every iteration
     def _classify(self, x: NDArray):  # (batch_size, n_channel, n_times)
 
         logger.debug(f"Classifying for {x.shape=}")
@@ -400,6 +405,24 @@ class OnlineDecoder:
 
         logger.debug(f"Pushing prediction {y}")
         self.output_sw.push_sample([y])
+
+    def _classify_early_stopping(self, x: NDArray):  # (batch_size, n_channel, n_times)
+
+        logger.debug(f"Classifying for {x.shape=}")
+
+        # This is assuming that the classifier is of type `pyntbci.stopping.MarginStopping`
+        y = self.classifier.predict(x)[0]
+        if np.isnan(y).sum() > 0:
+            logger.error("NaNs found in prediction")
+
+        if (
+            y > 0
+        ):  # this is how `pyntbci.stopping.MarginStopping` marks that it found a prediction
+            # later we need to shift with -1 to go back to 0 indexing
+            logger.debug(f"Pushing prediction {y}")
+
+            # `speller_select` is the prefix expected by dp-cvep-speller
+            self.output_sw.push_sample([f"speller_select {y-1}"])
 
     def _run_loop(self, stop_event: threading.Event):
 
