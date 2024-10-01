@@ -4,6 +4,7 @@ from dareplane_utils.default_server.server import DefaultServer
 from fire import Fire
 
 from cvep_decoder.online_decoding import online_decoder_factory
+from cvep_decoder.train_decoder import create_classifier
 from cvep_decoder.utils.logging import logger
 
 
@@ -24,6 +25,7 @@ def main(
         # ),
         "CONNECT_DECODER": decoder.init_all,
         "DECODE ONLINE": decoder.run,
+        "FIT MODEL": create_classifier,
     }
 
     server = DefaultServer(
