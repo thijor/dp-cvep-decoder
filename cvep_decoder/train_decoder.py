@@ -2,7 +2,7 @@ import json
 import os
 import pickle
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import joblib
@@ -157,15 +157,19 @@ def create_classifier(cfg: dict):
     )
 
     rcca = fit_rcca_model(cmeta, X, y, V)
+    stop = fit_early_stop_rcca_model(cmeta, X, y, V)
 
     # Cross-validation
     acc, dur = calc_cv_accuracy(rcca, cmeta, V, X, y)
 
+    logger.info(f"Cross val reached: {acc=}, with durations {dur=}")
+
     out_file = cfg["training"]["out_file"]
     out_file_meta = cfg["training"]["out_file_meta"]
 
-    joblib.save(rcca, out_file)
-    # json.dump(ClassifierMeta, out_file_meta)  # TODO: Fix storing the meta
+    joblib.dump(rcca, out_file)
+    joblib.dump(stop, Path(out_file).with_suffix(".early_stop.joblib"))
+    json.dump(ClassifierMeta, asdict(out_file_meta))
     logger.info(f"Classifier saved to {out_file}, meta data saved to {out_file_meta}")
 
     return 0
@@ -183,6 +187,28 @@ def fit_rcca_model(
     )
     rcca.fit(X, y)
     return rcca
+
+
+def fit_early_stop_rcca_model(
+    cmeta: dict, X: np.ndarray, y: np.ndarray, V: np.ndarray
+) -> pyntbci.stopping.MarginStopping:
+
+    # Setup classifier
+    rcca = pyntbci.classifiers.rCCA(
+        stimulus=V,
+        fs=cmeta.sfreq,
+        event=cmeta.event,
+        onset_event=True,
+        encoding_length=cmeta.encoding_length,
+    )
+    stop = pyntbci.stopping.MarginStopping(
+        estimator=rcca,
+        segment_time=cmeta.segment_time_s,
+        fs=cmeta.sfreq,
+        target_p=cmeta.target_accuracy,
+    )
+
+    return stop
 
 
 def calc_cv_accuracy(
