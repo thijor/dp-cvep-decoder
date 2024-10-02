@@ -89,13 +89,15 @@ class OnlineDecoder:
 
     def __init__(
         self,
-        classifier: rCCA | ,
-        classifier_meta: dict,
+        classifier_path: Path,
+        classifier_meta_path: Path,
         input_stream_name: str,
         marker_stream_name: str,
         output_stream_name: str,
         input_buffer_size_s: float,
         start_eval_marker: str,
+        classifier: rCCA | MarginStopping | None = None,
+        classifier_meta: dict | None = None,
         max_eval_time_s: float = 10,
         classifier_input_sfreq: float | None = None,
         t_sleep_s: float = 0.1,
@@ -107,6 +109,9 @@ class OnlineDecoder:
         pre_eval_start_s: float = 0.0,
         selected_channels: list[str] | None = None,
     ):
+
+        self.classifier_path = classifier_path
+        self.classifier_meta_path = classifier_meta_path
         self.classifier = classifier
         self.classifier_meta = classifier_meta
         self.input_stream_name = input_stream_name
@@ -142,9 +147,17 @@ class OnlineDecoder:
         self.output_sw: StreamWatcher = None
 
         # Derived attributes
-        self.classifier_input_sfreq = self.classifier_meta["sfreq"]
-        self.band = self.classifier_meta["band"]
         self.pre_eval_start_n = None  # will be set once connected to input stream
+
+        # derived attributes if meta data is loaded -> else set after `self.load_model`
+        self.band = None if classifier_meta is None else classifier_meta["band"]
+        self.classifier_input_sfreq = (
+            None if classifier_meta is None else classifier_meta["sfreq"]
+        )
+        if self.classifier is not None:
+            self.set_classify()
+        else:
+            self.classify = None
 
         eval_type_map = {
             "time": self.check_enough_time_based,
@@ -154,9 +167,35 @@ class OnlineDecoder:
 
         self.enough_data_for_next_prediction = eval_type_map[eval_after_type]
 
-        self.classify = self._classify_early_stopping if isinstance(classifier, MarginStopping) else self._classify
-
     # -------- Connection and initialization methods --------------------------
+    def load_model(
+        self,
+        classifier_path: Path | None = None,
+        classifier_meta_path: Path | None = None,
+    ):
+        """Loading the model and allowing for overwrites"""
+
+        cp = classifier_path if classifier_path is not None else self.classifier_path
+        cmp = (
+            classifier_meta_path
+            if classifier_meta_path is not None
+            else self.classifier_meta_path
+        )
+
+        self.classifier = joblib.load(cp)
+        self.classifier_meta = json.load(open(cmp, "r"))
+        self.classifier_input_sfreq = self.classifier_meta["sfreq"]
+        self.band = self.classifier_meta["band"]
+        self.set_classify()
+
+    def set_classify(self):
+
+        self.classify = (
+            self._classify_early_stopping
+            if isinstance(self.classifier, MarginStopping)
+            else self._classify
+        )
+
     def connect_input_streams(self):
         logger.info(f'Connecting to input stream "{self.input_stream_name}"')
         self.input_sw = StreamWatcher(
@@ -452,16 +491,18 @@ class OnlineDecoder:
         return thread, stop_event
 
 
-def online_decoder_factory(config_path: Path = Path("./configs/decoder.toml")):
+def online_decoder_factory(
+    config_path: Path = Path("./configs/decoder.toml"), preload: bool = True
+):
     """Factory function to create an OnlineDecoder object from a config file."""
     cfg = toml.load(config_path)
 
-    classifier = joblib.load(cfg["online"]["classifier"]["file"])
-    classifier_meta = json.load(open(cfg["online"]["classifier"]["meta_file"], "r"))
+    # classifier = joblib.load(cfg["online"]["classifier"]["file"])
+    # classifier_meta = json.load(open(cfg["online"]["classifier"]["meta_file"], "r"))
 
     online_dec = OnlineDecoder(
-        classifier,
-        classifier_meta=classifier_meta,
+        classifier_path=cfg["online"]["classifier"]["file"],
+        classifier_meta_path=cfg["online"]["classifier"]["meta_file"],
         input_stream_name=cfg["online"]["input"]["lsl_stream_name"],
         output_stream_name=cfg["online"]["output"]["lsl_stream_name"],
         marker_stream_name=cfg["online"]["input"]["lsl_marker_stream_name"],
@@ -474,6 +515,9 @@ def online_decoder_factory(config_path: Path = Path("./configs/decoder.toml")):
         max_eval_time_s=cfg["online"]["eval"]["start"]["max_time_s"],
         selected_channels=cfg["online"]["input"].get("selected_channels", None),
     )
+
+    if preload:
+        online_dec.load_model()
 
     return online_dec
 

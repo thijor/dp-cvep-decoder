@@ -17,12 +17,13 @@ def main(
     logger.setLevel(loglevel)
 
     logger.debug(f"Initializing decoder with {conf_pth=}")
-    decoder = online_decoder_factory(conf_pth)
+    decoder = online_decoder_factory(conf_pth, preload=False)
 
     pcommand_map = {
         # "CREATE CLASSIFIER": partial(
         #     create_classifier, subject="P001", session="S001", run="001"
         # ),
+        "LOAD MODEL": decoder.load_model,
         "CONNECT_DECODER": decoder.init_all,
         "DECODE ONLINE": decoder.run,
         "FIT MODEL": create_classifier,
