@@ -120,7 +120,7 @@ def create_classifier(
         x, events, sfreq = load_raw_and_events(
             fpath=tfile,
             data_stream_name=cfg["training"]["features"]["data_stream_name"],
-            marker_stream_name=cfg["training"]["features"]["marker_stream_name"],
+            marker_stream_name=cfg["training"]["features"]["lsl_marker_stream_name"],
             selected_channels=cfg["training"]["features"].get(
                 "selected_channels", None
             ),
@@ -253,7 +253,9 @@ def calc_cv_accuracy(
     )
 
     # Cross-validation
-    folds = np.repeat(np.arange(n_folds), int(np.ceil(X.shape[0] / n_folds)))[:X.shape[0]]
+    folds = np.repeat(np.arange(n_folds), int(np.ceil(X.shape[0] / n_folds)))[
+        : X.shape[0]
+    ]
     accuracy = np.zeros(n_folds)
     duration = np.zeros(n_folds)
 
@@ -341,6 +343,7 @@ def calc_cv_accuracy_no_early_stop(
         accuracy[i_fold] = np.mean(yh == y_tst)
 
     return accuracy
+
 
 if __name__ == "__main__":
     create_classifier()

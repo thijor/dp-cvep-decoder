@@ -15,7 +15,7 @@ tmax_s = 4.2
 target_freq_hz = 120                     # should be aligned with codes for rCCA
 passband_hz = [1, 40]
 data_stream_name = 'BioSemi'
-marker_stream_name = 'KeyboardMarkerStream'
+lsl_marker_stream_name = 'KeyboardMarkerStream'
 # selected_channels = ['C3', 'Cz', 'C4']   # If provided, only the mne.io.RawArray object will be filtered for these channels 
 selected_channels = [
  'A1',
