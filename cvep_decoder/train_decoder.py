@@ -92,8 +92,7 @@ def get_training_data_files(cfg: dict) -> list[Path]:
 
 # all options beyond cfg are for overwriting the config if necessary
 def create_classifier(
-    cfg: dict,
-    data_root: Path | None = Path("./data"),
+    data_root: Path | None = None,
     training_files_glob: str | None = None,
     out_file: Path | None = None,
     out_file_meta: Path | None = None,
@@ -130,7 +129,7 @@ def create_classifier(
         # create filterbank
         fb = FilterBank(
             bands={"band": cmeta.fband},
-            sfreq=cmeta.sfreq,
+            sfreq=sfreq,
             output="signal",
             n_in_channels=x.shape[1],
             filter_buffer_s=np.ceil(x.shape[0] / sfreq),
@@ -187,7 +186,7 @@ def create_classifier(
 
     joblib.dump(rcca, out_file)
     joblib.dump(stop, Path(out_file).with_suffix(".early_stop.joblib"))
-    json.dump(ClassifierMeta, asdict(out_file_meta))
+    json.dump(asdict(cmeta), open(out_file_meta, "w"))
     logger.info(f"Classifier saved to {out_file}, meta data saved to {out_file_meta}")
 
     return 0
@@ -254,7 +253,7 @@ def calc_cv_accuracy(
     )
 
     # Cross-validation
-    folds = np.repeat(np.arange(n_folds), int(X.shape[0] / n_folds))
+    folds = np.repeat(np.arange(n_folds), int(np.ceil(X.shape[0] / n_folds)))[:X.shape[0]]
     accuracy = np.zeros(n_folds)
     duration = np.zeros(n_folds)
 
@@ -342,3 +341,6 @@ def calc_cv_accuracy_no_early_stop(
         accuracy[i_fold] = np.mean(yh == y_tst)
 
     return accuracy
+
+if __name__ == "__main__":
+    create_classifier()
