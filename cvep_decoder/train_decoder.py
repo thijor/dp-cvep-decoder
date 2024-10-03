@@ -89,7 +89,7 @@ def get_training_data_files(cfg: dict) -> list[Path]:
     files = list(data_dir.rglob(glob_pattern))
 
     if files == []:
-        logger.warning(
+        logger.error(
             f"Did not find files for training at {data_dir} with pattern '{glob_pattern}'"
         )
 
@@ -120,6 +120,11 @@ def create_classifier(
     cmeta = classifier_meta_from_cfg(cfg)
 
     t_files = get_training_data_files(cfg)
+
+    if t_files != []:
+        logger.error("No training files found - stopping fitting attempt")
+        return 1
+
     epo_list = []
     for tfile in t_files:
 
@@ -189,6 +194,10 @@ def create_classifier(
 
     out_file = cfg["training"]["out_file"]
     out_file_meta = cfg["training"]["out_file_meta"]
+
+    # assert folders are there
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file_meta.parent.mkdir(parents=True, exist_ok=True)
 
     joblib.dump(rcca, out_file)
     joblib.dump(stop, Path(out_file).with_suffix(".early_stop.joblib"))
