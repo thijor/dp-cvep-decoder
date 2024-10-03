@@ -172,7 +172,7 @@ class OnlineDecoder:
         self,
         classifier_path: Path | None = None,
         classifier_meta_path: Path | None = None,
-    ):
+    ) -> int:
         """Loading the model and allowing for overwrites"""
 
         cp = classifier_path if classifier_path is not None else self.classifier_path
@@ -182,11 +182,21 @@ class OnlineDecoder:
             else self.classifier_meta_path
         )
 
-        self.classifier = joblib.load(cp)
-        self.classifier_meta = json.load(open(cmp, "r"))
+        try:
+            self.classifier = joblib.load(cp)
+            self.classifier_meta = json.load(open(cmp, "r"))
+        except FileNotFoundError:
+            logger.error(f"Could not load classifier from {cp=} or {cmp=}, validate that both exist.")
+            return 1
+
+
         self.classifier_input_sfreq = self.classifier_meta["sfreq"]
-        self.band = self.classifier_meta["band"]
+        self.band = self.classifier_meta["fband"]
         self.set_classify()
+
+        logger.info(f"Loaded classifier from {cp=}")
+
+        return 0
 
     def set_classify(self):
 
@@ -258,7 +268,7 @@ class OnlineDecoder:
             "MISC",
             channel_count=1,
             nominal_srate=pylsl.IRREGULAR_RATE,
-            channel_format="int32",
+            channel_format="string",
             source_id="output_stream_id",
         )
         self.output_sw = pylsl.StreamOutlet(info)
@@ -385,12 +395,12 @@ class OnlineDecoder:
             markers = self.input_mrk_sw.unfold_buffer()[-self.input_mrk_sw.n_new :, 0]
             markers_t = self.input_mrk_sw.unfold_buffer_t()[-self.input_mrk_sw.n_new :]
 
-            logger.debug(f"Checking for {self.start_eval_marker=}")
-            logger.debug(f"Checking through {markers=}, {markers_t}")
+            # logger.debug(f"Checking for {self.start_eval_marker=}")
+            # logger.debug(f"Checking through {markers=}, {markers_t}")
 
             if self.start_eval_marker in markers:
                 logger.debug(
-                    f"Starting decoding based on marker {self.start_eval_marker}"
+                    f"Starting decoding based on marker '{self.start_eval_marker}'"
                 )
                 self.is_decoding = True
                 self.start_eval_time = time.time()
@@ -416,7 +426,7 @@ class OnlineDecoder:
 
         else:
             if time.time() - self.start_eval_time > self.max_eval_time_s:
-                logger.info("Stopping decoding after max_eval_time_s")
+                logger.info(f"Stopping decoding after {self.max_eval_time_s=}")
                 self.is_decoding = False
 
             else:

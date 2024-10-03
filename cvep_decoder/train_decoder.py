@@ -53,7 +53,7 @@ def load_raw_and_events(
     raw_ts = data[names.index(data_stream_name)]["time_stamps"]
     idx_in_raw = [np.argmin(np.abs(raw_ts - ts)) for ts in evd["time_stamps"]]
     events = np.vstack(
-        [idx_in_raw, [e[0] for e in evd["time_series"]]], dtype="object"
+        [idx_in_raw, np.asarray([e[0] for e in evd["time_series"]], dtype="object")]
     ).T
 
     # select channels if specified
@@ -121,7 +121,7 @@ def create_classifier(
 
     t_files = get_training_data_files(cfg)
 
-    if t_files != []:
+    if t_files == []:
         logger.error("No training files found - stopping fitting attempt")
         return 1
 
@@ -196,8 +196,8 @@ def create_classifier(
     out_file_meta = cfg["training"]["out_file_meta"]
 
     # assert folders are there
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file_meta.parent.mkdir(parents=True, exist_ok=True)
+    Path(out_file).parent.mkdir(parents=True, exist_ok=True)
+    Path(out_file_meta).parent.mkdir(parents=True, exist_ok=True)
 
     joblib.dump(rcca, out_file)
     joblib.dump(stop, Path(out_file).with_suffix(".early_stop.joblib"))
@@ -239,6 +239,8 @@ def fit_early_stop_rcca_model(
         fs=cmeta.sfreq,
         target_p=cmeta.target_accuracy,
     )
+    
+    stop.fit(X, y)
 
     return stop
 
