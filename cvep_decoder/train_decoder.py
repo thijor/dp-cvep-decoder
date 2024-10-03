@@ -66,7 +66,7 @@ def load_raw_and_events(
         ]
         idx = [ch_names.index(ch) for ch in selected_channels]
         x = x[:, idx]
-    sfreq = int(data[names.index(data_stream_name)]["info"]["nominal_srate"][0])
+    sfreq = int(float(data[names.index(data_stream_name)]["info"]["nominal_srate"][0]))
 
     return x, events, sfreq
 
@@ -89,7 +89,9 @@ def get_training_data_files(cfg: dict) -> list[Path]:
     files = list(data_dir.rglob(glob_pattern))
 
     if files == []:
-        logger.warning(f"Did not find files for training at {data_dir} with pattern '{glob_pattern}'")
+        logger.warning(
+            f"Did not find files for training at {data_dir} with pattern '{glob_pattern}'"
+        )
 
     return files
 
