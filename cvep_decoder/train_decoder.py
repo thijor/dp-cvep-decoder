@@ -83,9 +83,13 @@ def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
 
 
 def get_training_data_files(cfg: dict) -> list[Path]:
-    files = list(
-        Path(cfg["training"]["data_root"]).rglob(cfg["training"]["training_files_glob"])
-    )
+    data_dir = Path(cfg["training"]["data_root"])
+    glob_pattern = cfg["training"]["training_files_glob"]
+
+    files = list(data_dir.rglob(glob_pattern))
+
+    if files == []:
+        logger.warning(f"Did not find files for training at {data_dir} with pattern '{glob_pattern}'")
 
     return files
 
@@ -346,4 +350,7 @@ def calc_cv_accuracy_no_early_stop(
 
 
 if __name__ == "__main__":
+    # Add console handler if used as cli
+    logger = get_logger("cvep_decoder", add_console_handler=True)
+
     create_classifier()
