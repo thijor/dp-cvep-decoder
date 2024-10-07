@@ -1,36 +1,36 @@
 import json
+from pathlib import Path
 import threading
 import time
-from pathlib import Path
 from typing import Literal
 
-import joblib
-import numpy as np
-import pylsl
-import toml
 from dareplane_utils.general.time import sleep_s
 from dareplane_utils.logging.logger import get_logger
 from dareplane_utils.signal_processing.filtering import FilterBank
 from dareplane_utils.stream_watcher.lsl_stream_watcher import StreamWatcher
 from fire import Fire
+import joblib
 from mne.filter import resample
+import numpy as np
 from numpy.typing import NDArray
+import pylsl
 from pyntbci.classifiers import rCCA
 from pyntbci.stopping import MarginStopping
+import toml
 
 from cvep_decoder.utils.logging import logger
 
 
 class OnlineDecoder:
-    """Decoder class to evaluate a classifier based on data from a LSL stream.
+    """Decoder class to evaluate a classifier based on data from an LSL stream.
 
     Parameters
     ----------
-    classifier : rcca
+    classifier : rCCA | MarginStopping
         classifier object to use for decoding. Either a `rCCA` or a `MarginStopping` object from pyntbci.
         The MarginStopping is used in combination with the dp-cvep-speller
 
-    classifier_meta: dict
+    classifier_meta : dict
         Dictionary with metadata about the classifier. Should contain:
             - sfreq: float
             - band: tuple[float, float]
@@ -83,7 +83,8 @@ class OnlineDecoder:
 
     selected_channels : list[str] | list[int] | None
         if a list of channel names is provided, data of only those channels will
-        be processed. Default is None -> all channels are considered. If list of integers is provided, they are interpreted as indeces.
+        be processed. Default is None -> all channels are considered. If list of integers is provided, they are
+        interpreted as indeces.
 
     """
 
@@ -99,7 +100,6 @@ class OnlineDecoder:
         classifier: rCCA | MarginStopping | None = None,
         classifier_meta: dict | None = None,
         max_eval_time_s: float = 10,
-        classifier_input_sfreq: float | None = None,
         t_sleep_s: float = 0.1,
         decode_trigger_markers: list[str] | None = None,
         offset_nsamples: float = 0,
@@ -123,7 +123,7 @@ class OnlineDecoder:
         self.decode_trigger_markers = decode_trigger_markers
         self.offset_nsamples = offset_nsamples
         self.curr_offset_nsamples = (
-            offset_nsamples  # used of epochs are sliced by markers
+            offset_nsamples  # used if epochs are sliced by markers
         )
 
         self.start_eval_marker = start_eval_marker
@@ -137,14 +137,14 @@ class OnlineDecoder:
         self.is_decoding: bool = False
         self.start_eval_time: float = 0.0
 
-        self.input_sw: StreamWatcher = None
+        self.input_sw: StreamWatcher | None = None
         # Will be derived once the input_sw is connected
-        self.input_sfreq: float = None
-        self.input_chs_info: list[dict[str, str]] = None
-        self.input_mrk_sw: StreamWatcher = None
+        self.input_sfreq: float | None = None
+        self.input_chs_info: list[dict[str, str]] | None = None
+        self.input_mrk_sw: StreamWatcher | None = None
 
-        self.filterbank: FilterBank = None
-        self.output_sw: StreamWatcher = None
+        self.filterbank: FilterBank | None = None
+        self.output_sw: StreamWatcher | None = None
 
         # Derived attributes
         self.pre_eval_start_n = None  # will be set once connected to input stream
@@ -188,7 +188,6 @@ class OnlineDecoder:
         except FileNotFoundError:
             logger.error(f"Could not load classifier from {cp=} or {cmp=}, validate that both exist.")
             return 1
-
 
         self.classifier_input_sfreq = self.classifier_meta["sfreq"]
         self.band = self.classifier_meta["fband"]
@@ -309,12 +308,12 @@ class OnlineDecoder:
         if any(trigger_marker_indices):
 
             # find the closest match of time points between the last trigger marker and data sample times
-            t = self.input_sw.unfold_buffer_t()[-self.filterbank.n_new :]
+            t = self.input_sw.unfold_buffer_t()[-self.filterbank.n_new:]
             idx_end = np.abs(markers_t[trigger_marker_indices[-1], None] - t).argmin(
                 axis=1
             )
 
-            # the offset we will effectivefly use is the global shift (by self.offset_nsamples)
+            # the offset we will effectively use is the global shift (by self.offset_nsamples)
             # plus wherever the triggering marker is relative to the latest data
             # sample from the input_sw
             self.curr_offset_nsamples = self.offset_nsamples + (len(t) - idx_end)
@@ -334,9 +333,9 @@ class OnlineDecoder:
         else:
             self.filterbank.filter(
                 self.input_sw.unfold_buffer()[
-                    -self.input_sw.n_new :, self.selected_ch_idx
+                    -self.input_sw.n_new:, self.selected_ch_idx
                 ],
-                self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :],
+                self.input_sw.unfold_buffer_t()[-self.input_sw.n_new:],
             )
 
             logger.debug(f"Added {self.input_sw.n_new=} samples")
@@ -344,7 +343,7 @@ class OnlineDecoder:
 
     def _create_epoch(self) -> NDArray:
         """
-        Always use all new data in the filter buffer triggering this methods
+        Always use all new data in the filter buffer triggering this method
         is timed to the desired evaluation trigger frequency
         """
 
@@ -392,8 +391,8 @@ class OnlineDecoder:
             )
 
         if self.input_mrk_sw.n_new > 0:
-            markers = self.input_mrk_sw.unfold_buffer()[-self.input_mrk_sw.n_new :, 0]
-            markers_t = self.input_mrk_sw.unfold_buffer_t()[-self.input_mrk_sw.n_new :]
+            markers = self.input_mrk_sw.unfold_buffer()[-self.input_mrk_sw.n_new:, 0]
+            # markers_t = self.input_mrk_sw.unfold_buffer_t()[-self.input_mrk_sw.n_new:]
 
             # logger.debug(f"Checking for {self.start_eval_marker=}")
             # logger.debug(f"Checking through {markers=}, {markers_t}")
