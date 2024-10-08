@@ -121,7 +121,7 @@ def create_classifier(
 
     t_files = get_training_data_files(cfg)
 
-    if t_files != []:
+    if t_files == []:
         logger.error("No training files found - stopping fitting attempt")
         return 1
 
@@ -196,8 +196,8 @@ def create_classifier(
     out_file_meta = cfg["training"]["out_file_meta"]
 
     # assert folders are there
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file_meta.parent.mkdir(parents=True, exist_ok=True)
+    Path(out_file).parent.mkdir(parents=True, exist_ok=True)
+    Path(out_file_meta).parent.mkdir(parents=True, exist_ok=True)
 
     joblib.dump(rcca, out_file)
     joblib.dump(stop, Path(out_file).with_suffix(".early_stop.joblib"))
