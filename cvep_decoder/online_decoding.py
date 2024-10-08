@@ -1,22 +1,22 @@
 import json
-from pathlib import Path
 import threading
 import time
+from pathlib import Path
 from typing import Literal
 
+import joblib
+import numpy as np
+import pylsl
+import toml
 from dareplane_utils.general.time import sleep_s
 from dareplane_utils.logging.logger import get_logger
 from dareplane_utils.signal_processing.filtering import FilterBank
 from dareplane_utils.stream_watcher.lsl_stream_watcher import StreamWatcher
 from fire import Fire
-import joblib
-import numpy as np
 from numpy.typing import NDArray
-import pylsl
 from pyntbci.classifiers import rCCA
 from pyntbci.stopping import MarginStopping
 from scipy.signal import resample
-import toml
 
 from cvep_decoder.utils.logging import logger
 
@@ -166,6 +166,17 @@ class OnlineDecoder:
         }
 
         self.enough_data_for_next_prediction = eval_type_map[eval_after_type]
+        self.t_last = 0
+
+        # Setup warnings if parameters choice could be critical
+        if eval_after_type == "time" and np.abs(eval_after_s - t_sleep_s) < 0.005:
+            logger.warning(
+                f"{eval_after_s=} and {t_sleep_s=} (main loop speed) are very close."
+                " This might lead to unexpected cases of skipped decoding cycles."
+                " Either choose a `eval_after_s` much larger than `t_sleep_s` or"
+                " a `eval_after_s` smaller (~1/2 * `t_sleep_s`) to evaluate the"
+                " decoding every loop."
+            )
 
     # -------- Connection and initialization methods --------------------------
     def load_model(
@@ -186,7 +197,9 @@ class OnlineDecoder:
             self.classifier = joblib.load(cp)
             self.classifier_meta = json.load(open(cmp, "r"))
         except FileNotFoundError:
-            logger.error(f"Could not load classifier from {cp=} or {cmp=}, validate that both exist.")
+            logger.error(
+                f"Could not load classifier from {cp=} or {cmp=}, validate that both exist."
+            )
             return 1
 
         self.classifier_input_sfreq = self.classifier_meta["sfreq"]
@@ -300,7 +313,7 @@ class OnlineDecoder:
         if any(trigger_marker_indices):
 
             # find the closest match of time points between the last trigger marker and data sample times
-            t = self.input_sw.unfold_buffer_t()[-self.filterbank.n_new:]
+            t = self.input_sw.unfold_buffer_t()[-self.filterbank.n_new :]
             idx_end = np.abs(markers_t[trigger_marker_indices[-1], None] - t).argmin(
                 axis=1
             )
@@ -325,10 +338,17 @@ class OnlineDecoder:
         else:
             self.filterbank.filter(
                 self.input_sw.unfold_buffer()[
-                    -self.input_sw.n_new:, self.selected_ch_idx
+                    -self.input_sw.n_new :, self.selected_ch_idx
                 ],
-                self.input_sw.unfold_buffer_t()[-self.input_sw.n_new:],
+                self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :],
             )
+
+            # Lines for debugging only
+            # t = self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :]
+            # logger.debug(
+            #     f"Time stamp window {t[0] - self.t_last=}, {t[-1] - self.t_last=}, {t[-1] - t[0]}"
+            # )
+            # self.t_last = t[-1]
 
             logger.debug(f"Added {self.input_sw.n_new=} samples")
             self.input_sw.n_new = 0  # reset to ensure only additional data gets filled onto the filterbank
@@ -368,11 +388,19 @@ class OnlineDecoder:
     def _resample(self, x: NDArray) -> NDArray:
 
         if self.classifier_input_sfreq is not None:
-            logger.debug(f"The data x is of shape {x.shape} (n_trials x n_channels x n_samples) before resample")
-            x = resample(x, num=int(x.shape[2] / self.input_sfreq * self.classifier_input_sfreq), axis=2)
+            logger.debug(
+                f"The data x is of shape {x.shape} (n_trials x n_channels x n_samples) before resample"
+            )
+            x = resample(
+                x,
+                num=int(x.shape[2] / self.input_sfreq * self.classifier_input_sfreq),
+                axis=2,
+            )
             if np.isnan(x).sum() > 0:
                 logger.error("NaNs found after resampling")
-            logger.debug(f"The data x is of shape {x.shape} (n_trials x n_channels x n_samples) after resample")
+            logger.debug(
+                f"The data x is of shape {x.shape} (n_trials x n_channels x n_samples) after resample"
+            )
 
         return x
 
@@ -383,7 +411,7 @@ class OnlineDecoder:
             )
 
         if self.input_mrk_sw.n_new > 0:
-            markers = self.input_mrk_sw.unfold_buffer()[-self.input_mrk_sw.n_new:, 0]
+            markers = self.input_mrk_sw.unfold_buffer()[-self.input_mrk_sw.n_new :, 0]
             # markers_t = self.input_mrk_sw.unfold_buffer_t()[-self.input_mrk_sw.n_new:]
 
             # logger.debug(f"Checking for {self.start_eval_marker=}")
@@ -406,6 +434,20 @@ class OnlineDecoder:
                 self.filterbank.n_new = 0
                 self.input_mrk_sw.n_new = 0
 
+    def validate_num_samples(self):
+        t = self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :]
+        dt = t[-1] - t[0]
+        nsamples_expected = int(np.round(dt * self.input_sfreq))
+
+        # allow 10% deviation
+        if np.abs((nsamples_expected - self.input_sw.n_new)) / nsamples_expected > 0.1:
+            logger.warning(
+                f"Number of samples in the buffer ({self.input_sw.n_new})"
+                f" is not as expected ({nsamples_expected}). This might"
+                " indicate a problem with the LSL stream sampling rate "
+                f"({self.input_sfreq=} is expected)."
+            )
+
     def update(self):
 
         self.input_sw.update()
@@ -425,6 +467,11 @@ class OnlineDecoder:
                 # Enough new data -> evaluate classifier
                 if self.enough_data_for_next_prediction() and self.is_decoding:
 
+                    # validate that the number of samples that arrived at the
+                    # StreamWatcher is as expected by the LSL streams sampling
+                    # rate
+                    self.validate_num_samples()
+
                     self._filter()
 
                     x = self._create_epoch()
@@ -437,7 +484,9 @@ class OnlineDecoder:
 
     def _classify(self, x: NDArray):  # (n_trials, n_channels, n_samples)
 
-        logger.debug(f"Classifying for {x.shape=}")  # should be [1, n_channels, n_samples]
+        logger.debug(
+            f"Classifying for {x.shape=}"
+        )  # should be [1, n_channels, n_samples]
         y = self.classifier.predict(x)[0]
         logger.debug(f"Classified with prediction {y}")
 

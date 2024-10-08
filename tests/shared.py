@@ -41,7 +41,7 @@ def provide_joblib_model():
     joblib.dump(rcca, file)
 
     meta_file = Path("./test_meta.json")
-    meta = {"sfreq": fs, "band": [1, 40]}
+    meta = {"sfreq": fs, "fband": [1, 40]}
     json.dump(meta, open(meta_file, "w"))
 
     yield file

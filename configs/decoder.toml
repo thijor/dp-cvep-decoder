@@ -64,7 +64,7 @@ sleep_s = 0.1                            # time between updates in seconds
 
 [online.input]
 lsl_stream_name = 'BioSemi'
-buffer_size_s = 1.0
+buffer_size_s = 5.0
 lsl_marker_stream_name = 'cvep-speller-stream'
 # selected_channels = ['C3', 'Cz', 'C4']   # channels to be used for decoding, use the names as they would appear in the lsl streams meta data
 
@@ -78,7 +78,7 @@ meta_file = './test_meta.json'      # contains meta info about the model, includ
 
 [online.eval]
 eval_after_type = 'time'                  # 'time', 'nsamples', or 'marker' (if marker, the marker config section must be present)
-eval_after_s = 0.1                        # time after which the model is evaluated
+eval_after_s = 0.05                       # time after which the model is evaluated - should be different from online.sleep_s!
 eval_after_nsamples = 10                  # number of samples after which the model is evaluated
 
 [online.eval.start]
