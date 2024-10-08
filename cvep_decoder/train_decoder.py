@@ -162,11 +162,13 @@ def create_classifier(
             for e in np.split(xf, epo_events[:, 0] - n_pre)[1:]
         ]
     X = np.asarray(epo_list).transpose(0, 2, 1)
-    logger.debug(f"The training data X is of shape {X.shape} (trials x channels x samples) before resample")
 
     # Resample
+    logger.debug(f"The training data X is of shape {X.shape} (n_trials x n_channels x n_samples) before resample")
     X = resample(X, num=int((cmeta.tmax - cmeta.tmin) * cmeta.sfreq), axis=2)
-    logger.debug(f"The training data X is of shape {X.shape} (trials x channels x samples) after resample")
+    if np.isnan(X).sum() > 0:
+        logger.error("NaNs found after resampling")
+    logger.debug(f"The training data X is of shape {X.shape} (n_trials x n_channels x n_samples) after resample")
 
     # Extract trial labels
     y = np.array(
@@ -176,7 +178,7 @@ def create_classifier(
             if '"target"' in e[1]
         ]
     )
-    logger.debug(f"The labels y is of shape: {y.shape} (trials)")
+    logger.debug(f"The labels y is of shape: {y.shape} (n_trials)")
 
     # Load stimulus sequences
     V = np.repeat(
@@ -184,7 +186,7 @@ def create_classifier(
         int(cmeta.sfreq / cmeta.presentation_rate),
         axis=1,
     )
-    logger.debug(f"The stimulus V is of shape: {V.shape} (codes x samples)")
+    logger.debug(f"The stimulus V is of shape: {V.shape} (n_codes x n_samples)")
 
     # Fit models of full data
     rcca = fit_rcca_model(cmeta, X, y, V)
@@ -223,11 +225,11 @@ def fit_rcca_model(
     cmeta: ClassifierMeta
         The classifier hyperparameters.
     X: NDArray
-        The EEG data matrix of shape (trials x channels x samples).
+        The EEG data matrix of shape (n_trials x n_channels x n_samples).
     y: NDArray
-        The label vector of shape (trials).
+        The label vector of shape (n_trials).
     V: NDArray
-        The stimulus matrix of shape (codes x samples).
+        The stimulus matrix of shape (n_codes x n_samples).
 
     Returns
     -------
@@ -259,11 +261,11 @@ def fit_rcca_model_early_stop(
     cmeta: ClassifierMeta
         The classifier hyperparameters.
     X: NDArray
-        The EEG data matrix of shape (trials x channels x samples).
+        The EEG data matrix of shape (n_trials x n_channels x n_samples).
     y: NDArray
-        The label vector of shape (trials).
+        The label vector of shape (n_trials).
     V: NDArray
-        The stimulus matrix of shape (codes x samples).
+        The stimulus matrix of shape (n_codes x n_samples).
 
     Returns
     -------
@@ -302,11 +304,11 @@ def calc_cv_accuracy(
     cmeta: ClassifierMeta
         The classifier hyperparameters.
     X: NDArray
-        The EEG data matrix of shape (trials x channels x samples).
+        The EEG data matrix of shape (n_trials x n_channels x n_samples).
     y: NDArray
-        The label vector of shape (trials).
+        The label vector of shape (n_trials).
     V: NDArray
-        The stimulus matrix of shape (codes x samples).
+        The stimulus matrix of shape (n_codes x n_samples).
     n_folds: int (default: 4)
         The number of folds for cross-validation.
 
@@ -358,11 +360,11 @@ def calc_cv_accuracy_early_stop(
     cmeta: ClassifierMeta
         The classifier hyperparameters.
     X: NDArray
-        The EEG data matrix of shape (trials x channels x samples).
+        The EEG data matrix of shape (n_trials x n_channels x n_samples).
     y: NDArray
-        The label vector of shape (trials).
+        The label vector of shape (n_trials).
     V: NDArray
-        The stimulus matrix of shape (codes x samples).
+        The stimulus matrix of shape (n_codes x n_samples).
     n_folds: int (default: 4)
         The number of folds for cross-validation.
 

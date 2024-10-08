@@ -10,12 +10,12 @@ from dareplane_utils.signal_processing.filtering import FilterBank
 from dareplane_utils.stream_watcher.lsl_stream_watcher import StreamWatcher
 from fire import Fire
 import joblib
-from mne.filter import resample
 import numpy as np
 from numpy.typing import NDArray
 import pylsl
 from pyntbci.classifiers import rCCA
 from pyntbci.stopping import MarginStopping
+from scipy.signal import resample
 import toml
 
 from cvep_decoder.utils.logging import logger
@@ -155,7 +155,7 @@ class OnlineDecoder:
             None if classifier_meta is None else classifier_meta["sfreq"]
         )
         if self.classifier is not None:
-            self.set_classify()
+            self.classify = self._classify
         else:
             self.classify = None
 
@@ -191,19 +191,11 @@ class OnlineDecoder:
 
         self.classifier_input_sfreq = self.classifier_meta["sfreq"]
         self.band = self.classifier_meta["fband"]
-        self.set_classify()
+        self.classify = self._classify
 
         logger.info(f"Loaded classifier from {cp=}")
 
         return 0
-
-    def set_classify(self):
-
-        self.classify = (
-            self._classify_early_stopping
-            if isinstance(self.classifier, MarginStopping)
-            else self._classify
-        )
 
     def connect_input_streams(self):
         logger.info(f'Connecting to input stream "{self.input_stream_name}"')
@@ -366,7 +358,7 @@ class OnlineDecoder:
             len(x) - self.curr_offset_nsamples,
         )
         x = x[selection_slice, :, 0]
-        x = x.T[None, :, :]  # (1, n_channel, n_times)
+        x = x.T[None, :, :]  # (1, n_channels, n_samples)
 
         if np.isnan(x).sum() > 0:
             logger.error("NaNs found after epoching")
@@ -376,11 +368,11 @@ class OnlineDecoder:
     def _resample(self, x: NDArray) -> NDArray:
 
         if self.classifier_input_sfreq is not None:
-            logger.debug(f"Resampling to {self.classifier_input_sfreq} Hz")
-            down = self.input_sfreq / self.classifier_input_sfreq
-            x = resample(x.astype("float64"), down=down, axis=-1).astype("float32")
+            logger.debug(f"The data x is of shape {x.shape} (n_trials x n_channels x n_samples) before resample")
+            x = resample(x, num=int(x.shape[2] / self.input_sfreq * self.classifier_input_sfreq), axis=2)
             if np.isnan(x).sum() > 0:
                 logger.error("NaNs found after resampling")
+            logger.debug(f"The data x is of shape {x.shape} (n_trials x n_channels x n_samples) after resample")
 
         return x
 
@@ -443,34 +435,16 @@ class OnlineDecoder:
 
                     self.classify(xs)
 
-    # the plain classifier that provides a class for every iteration
-    def _classify(self, x: NDArray):  # (batch_size, n_channel, n_times)
+    def _classify(self, x: NDArray):  # (n_trials, n_channels, n_samples)
 
-        logger.debug(f"Classifying for {x.shape=}")
+        logger.debug(f"Classifying for {x.shape=}")  # should be [1, n_channels, n_samples]
         y = self.classifier.predict(x)[0]
-        if np.isnan(y).sum() > 0:
-            logger.error("NaNs found after embedding")
+        logger.debug(f"Classified with prediction {y}")
 
-        logger.debug(f"Pushing prediction {y}")
-        self.output_sw.push_sample([y])
-
-    def _classify_early_stopping(self, x: NDArray):  # (batch_size, n_channel, n_times)
-
-        logger.debug(f"Classifying for {x.shape=}")
-
-        # This is assuming that the classifier is of type `pyntbci.stopping.MarginStopping`
-        y = self.classifier.predict(x)[0]
-        if np.isnan(y).sum() > 0:
-            logger.error("NaNs found in prediction")
-
-        if (
-            y > 0
-        ):  # this is how `pyntbci.stopping.MarginStopping` marks that it found a prediction
-            # later we need to shift with -1 to go back to 0 indexing
+        # If y=-1 then the classifier is not yet sufficiently certain to emit the classification
+        if y >= 0:
             logger.debug(f"Pushing prediction {y}")
-
-            # `speller_select` is the prefix expected by dp-cvep-speller
-            self.output_sw.push_sample([f"speller_select {y-1}"])
+            self.output_sw.push_sample([f"speller_select {y}"])
 
     def _run_loop(self, stop_event: threading.Event):
 
