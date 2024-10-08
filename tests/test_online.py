@@ -1,12 +1,10 @@
-# Testing online funcionality
+# Testing online functionality
 import logging
 import threading
 import time
 from pathlib import Path
 
 import numpy as np
-import plotly.express as px
-import polars as pl
 import pylsl
 import pytest
 from dareplane_utils.logging.logger import get_logger
@@ -300,7 +298,7 @@ def test_resampling(spawn_lsl_data_stream, provide_cvep_decoder, provide_marker_
     #
     # px.scatter(df, x="time", y="x", color="src").show()
 
-    # the example meta data we use specifies 50Hz -> we should have half
+    # the example metadata we use specifies 50Hz -> we should have half
     # of what the input was. Be lenient in rtol
     assert np.allclose(x.shape[2] / xs.shape[2], 2, rtol=0.05)
 

@@ -1,17 +1,16 @@
-import json
-import os
-import pickle
-import re
 from dataclasses import asdict, dataclass
+import json
 from pathlib import Path
+import re
 
+from dareplane_utils.logging.logger import get_logger
+from dareplane_utils.signal_processing.filtering import FilterBank
 import joblib
 import numpy as np
+from numpy.typing import NDArray
 import pyntbci
 import pyxdf
 import toml
-from dareplane_utils.logging.logger import get_logger
-from dareplane_utils.signal_processing.filtering import FilterBank
 from scipy.signal import resample
 
 from cvep_decoder.utils.logging import logger
@@ -19,26 +18,24 @@ from cvep_decoder.utils.logging import logger
 
 @dataclass
 class ClassifierMeta:
-    tmin: float = 0.0
-    tmax: float = 4.2
-    fband: tuple[float, float] = (2.0, 30.0)
-    n_channels = 32
-    sfreq: float = 120
-    frame_rate: float = 60
-    pre_trial_window_s: float = 1.0
-    code: str = "mgold_61_6521"
-    selected_channels: list[str] | None = None
-    segment_time_s: float = 0.1
-    event: str = "contrast"
-    onset_event: bool = True
-    encoding_length: float = 0.3
-    target_accuracy: float = 0.95  # used for early stop
+    tmin: float = 0.0  # start of a trial (stimulation) in seconds
+    tmax: float = 4.2  # end of a trial (stimulation) in seconds
+    fband: tuple[float, float] = (2.0, 30.0)  # passband highpass and lowpass in Hz
+    sfreq: float = 120  # EEG sampling frequency in Hz
+    presentation_rate: float = 60  # stimulus presentation rate in Hz
+    selected_channels: list[str] | None = None  # the EEG channels to use
+    pre_trial_window_s: float = 1.0  # baseline window in seconds
+    event: str = "contrast"  # the event definition used for rCCA
+    onset_event: bool = True  # whether to model an event for the onset of stimulation in each trial in rCCA
+    encoding_length: float = 0.3  # the length of the modeled transient response(s) in rCCA
+    target_accuracy: float = 0.95  # the targeted accuracy used for early stop
+    segment_time_s: float = 0.1  # the time used to incrementally grow trials in seconds
 
 
 def load_raw_and_events(
     fpath: Path,
     data_stream_name: str = "BioSemi",
-    marker_stream_name: str = "KeyboardMarkerStream",
+    marker_stream_name: str = "cvep-speller-stream",
     selected_channels: list[str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, float]:
 
@@ -53,7 +50,7 @@ def load_raw_and_events(
     raw_ts = data[names.index(data_stream_name)]["time_stamps"]
     idx_in_raw = [np.argmin(np.abs(raw_ts - ts)) for ts in evd["time_stamps"]]
     events = np.vstack(
-        [idx_in_raw, [e[0] for e in evd["time_series"]]], dtype="object"
+        [idx_in_raw, np.asarray([e[0] for e in evd["time_series"]], dtype="object")]
     ).T
 
     # select channels if specified
@@ -77,8 +74,13 @@ def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
         tmax=cfg["training"]["features"]["tmax_s"],
         fband=cfg["training"]["features"]["passband_hz"],
         sfreq=cfg["training"]["features"]["target_freq_hz"],
-        frame_rate=cfg["cvep"]["frame_rate_hz"],
+        presentation_rate=cfg["cvep"]["presentation_rate_hz"],
         selected_channels=cfg["training"]["features"].get("selected_channels", None),
+        event=cfg["training"]["decoder"]["event"],
+        onset_event=cfg["training"]["decoder"]["onset_event"],
+        encoding_length=cfg["training"]["decoder"]["encoding_length_s"],
+        target_accuracy=cfg["training"]["decoder"]["target_accuracy"],
+        segment_time_s=cfg["training"]["decoder"]["segment_time_s"],
     )
 
 
@@ -88,7 +90,7 @@ def get_training_data_files(cfg: dict) -> list[Path]:
 
     files = list(data_dir.rglob(glob_pattern))
 
-    if files == []:
+    if len(files) == 0:
         logger.error(
             f"Did not find files for training at {data_dir} with pattern '{glob_pattern}'"
         )
@@ -121,7 +123,7 @@ def create_classifier(
 
     t_files = get_training_data_files(cfg)
 
-    if t_files == []:
+    if len(t_files) == 0:
         logger.error("No training files found - stopping fitting attempt")
         return 1
 
@@ -151,31 +153,24 @@ def create_classifier(
         xf = fb.get_data()[:, :, 0]
 
         # Slice data to trials
-        epo_events = events[events[:, 1] == "start_trial"]
+        epo_events = events[events[:, 1] == cfg["training"]["trial_marker"]]
         n_pre = int(-1 * cmeta.tmin * sfreq)
         n_post = int(cmeta.tmax * sfreq)
 
         epo_list += [
-            e[: (n_post + n_pre), :]  # slice epochs to correct lenght
+            e[: (n_post + n_pre), :]  # slice epochs to correct length
             for e in np.split(xf, epo_events[:, 0] - n_pre)[1:]
         ]
-
     X = np.asarray(epo_list).transpose(0, 2, 1)
 
-    logger.debug(f"The training data is of shape {X.shape} before resample")
-
     # Resample
+    logger.debug(f"The training data X is of shape {X.shape} (n_trials x n_channels x n_samples) before resample")
     X = resample(X, num=int((cmeta.tmax - cmeta.tmin) * cmeta.sfreq), axis=2)
-    logger.debug(f"The training data is of shape {X.shape} after resample")
+    if np.isnan(X).sum() > 0:
+        logger.error("NaNs found after resampling")
+    logger.debug(f"The training data X is of shape {X.shape} (n_trials x n_channels x n_samples) after resample")
 
-    V = np.repeat(
-        np.load(cfg["training"]["codes_file"])["codes"].T,
-        int(cmeta.sfreq / cmeta.frame_rate),
-        axis=1,
-    )
-
-    logger.info(f"V shape: {V.shape} (codes x samples)")
-
+    # Extract trial labels
     y = np.array(
         [
             int(re.search(r'"target": (\d*)', e[1]).group(1))
@@ -183,14 +178,23 @@ def create_classifier(
             if '"target"' in e[1]
         ]
     )
+    logger.debug(f"The labels y is of shape: {y.shape} (n_trials)")
 
+    # Load stimulus sequences
+    V = np.repeat(
+        np.load(cfg["training"]["codes_file"])["codes"],
+        int(cmeta.sfreq / cmeta.presentation_rate),
+        axis=1,
+    )
+    logger.debug(f"The stimulus V is of shape: {V.shape} (n_codes x n_samples)")
+
+    # Fit models of full data
     rcca = fit_rcca_model(cmeta, X, y, V)
-    stop = fit_early_stop_rcca_model(cmeta, X, y, V)
+    stop = fit_rcca_model_early_stop(cmeta, X, y, V)
 
     # Cross-validation
-    acc, dur = calc_cv_accuracy(rcca, cmeta, V, X, y)
-
-    logger.info(f"Cross val reached: {acc=}, with durations {dur=}")
+    acc, dur = calc_cv_accuracy_early_stop(cmeta, X, y, V)
+    logger.info(f"Cross-validation reached accuracy {acc=}, with durations {dur=}")
 
     out_file = cfg["training"]["out_file"]
     out_file_meta = cfg["training"]["out_file_meta"]
@@ -208,62 +212,182 @@ def create_classifier(
 
 
 def fit_rcca_model(
-    cmeta: dict, X: np.ndarray, y: np.ndarray, V: np.ndarray
+    cmeta: ClassifierMeta,
+    X: NDArray,
+    y: NDArray,
+    V: NDArray,
 ) -> pyntbci.classifiers.rCCA:
+    """
+    Fit a standard rCCA model on labeled training data.
+
+    Parameters
+    ----------
+    cmeta: ClassifierMeta
+        The classifier hyperparameters.
+    X: NDArray
+        The EEG data matrix of shape (n_trials x n_channels x n_samples).
+    y: NDArray
+        The label vector of shape (n_trials).
+    V: NDArray
+        The stimulus matrix of shape (n_codes x n_samples).
+
+    Returns
+    -------
+    rcca: pyntbci.classifiers.rCCA
+        A trained rCCA classifier.
+    """
     rcca = pyntbci.classifiers.rCCA(
         stimulus=V,
         fs=cmeta.sfreq,
-        event="duration",
+        event=cmeta.event,
+        onset_event=cmeta.onset_event,
         encoding_length=cmeta.encoding_length,
-        onset_event=True,
     )
     rcca.fit(X, y)
     return rcca
 
 
-def fit_early_stop_rcca_model(
-    cmeta: dict, X: np.ndarray, y: np.ndarray, V: np.ndarray
+def fit_rcca_model_early_stop(
+    cmeta: ClassifierMeta,
+    X: NDArray,
+    y: NDArray,
+    V: NDArray,
 ) -> pyntbci.stopping.MarginStopping:
+    """
+    Fit an early stopping rCCA model on labeled training data.
 
-    # Setup classifier
+    Parameters
+    ----------
+    cmeta: ClassifierMeta
+        The classifier hyperparameters.
+    X: NDArray
+        The EEG data matrix of shape (n_trials x n_channels x n_samples).
+    y: NDArray
+        The label vector of shape (n_trials).
+    V: NDArray
+        The stimulus matrix of shape (n_codes x n_samples).
+
+    Returns
+    -------
+    stop: pyntbci.stopping.MarginStopping
+        A trained early stopping rCCA classifier.
+    """
     rcca = pyntbci.classifiers.rCCA(
         stimulus=V,
         fs=cmeta.sfreq,
         event=cmeta.event,
-        onset_event=True,
+        onset_event=cmeta.onset_event,
         encoding_length=cmeta.encoding_length,
     )
     stop = pyntbci.stopping.MarginStopping(
         estimator=rcca,
-        segment_time=cmeta.segment_time_s,
         fs=cmeta.sfreq,
+        segment_time=cmeta.segment_time_s,
         target_p=cmeta.target_accuracy,
     )
-
+    stop.fit(X, y)
     return stop
 
 
 def calc_cv_accuracy(
-    rcca: pyntbci.classifiers.rCCA,
     cmeta: ClassifierMeta,
-    V: np.ndarray,
-    X: np.ndarray,
-    y: np.ndarray,
+    X: NDArray,
+    y: NDArray,
+    V: NDArray,
     n_folds: int = 4,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> NDArray:
+    """
+    Evaluate an rCCA model on labeled training data using k-fold cross-validation.
+
+    Parameters
+    ----------
+    cmeta: ClassifierMeta
+        The classifier hyperparameters.
+    X: NDArray
+        The EEG data matrix of shape (n_trials x n_channels x n_samples).
+    y: NDArray
+        The label vector of shape (n_trials).
+    V: NDArray
+        The stimulus matrix of shape (n_codes x n_samples).
+    n_folds: int (default: 4)
+        The number of folds for cross-validation.
+
+    Returns
+    -------
+    accuracy: NDArray
+        The vector of accuracies for each of the folds of shape (n_folds).
+    """
 
     # Setup classifier
     rcca = pyntbci.classifiers.rCCA(
         stimulus=V,
         fs=cmeta.sfreq,
         event=cmeta.event,
-        onset_event=True,
+        onset_event=cmeta.onset_event,
+        encoding_length=cmeta.encoding_length,
+    )
+
+    # Cross-validation
+    folds = np.repeat(np.arange(n_folds), int(X.shape[0] / n_folds))
+    accuracy = np.zeros(n_folds)
+
+    for i_fold in range(n_folds):
+
+        # Split folds
+        X_trn, y_trn = X[i_fold != folds, :, :], y[i_fold != folds]
+        X_tst, y_tst = X[i_fold == folds, :, :], y[i_fold == folds]
+
+        # Train classifier and stopping
+        rcca.fit(X_trn, y_trn)
+        yh = rcca.predict(X_tst)
+        accuracy[i_fold] = np.mean(yh == y_tst)
+
+    return accuracy
+
+
+def calc_cv_accuracy_early_stop(
+    cmeta: ClassifierMeta,
+    X: NDArray,
+    y: NDArray,
+    V: NDArray,
+    n_folds: int = 4,
+) -> tuple[NDArray, NDArray]:
+    """
+    Evaluate an early stopping rCCA model on labeled training data using k-fold cross-validation.
+
+    Parameters
+    ----------
+    cmeta: ClassifierMeta
+        The classifier hyperparameters.
+    X: NDArray
+        The EEG data matrix of shape (n_trials x n_channels x n_samples).
+    y: NDArray
+        The label vector of shape (n_trials).
+    V: NDArray
+        The stimulus matrix of shape (n_codes x n_samples).
+    n_folds: int (default: 4)
+        The number of folds for cross-validation.
+
+    Returns
+    -------
+    accuracy: NDArray
+        The vector of accuracies for each of the folds of shape (n_folds).
+    duration: NDArray
+        The vector of trial durations for each of the folds of shape (n_folds).
+    """
+
+    # Setup classifier
+    rcca = pyntbci.classifiers.rCCA(
+        stimulus=V,
+        fs=cmeta.sfreq,
+        event=cmeta.event,
+        onset_event=cmeta.onset_event,
         encoding_length=cmeta.encoding_length,
     )
     stop = pyntbci.stopping.MarginStopping(
         estimator=rcca,
-        segment_time=cmeta.segment_time_s,
         fs=cmeta.sfreq,
+        segment_time=cmeta.segment_time_s,
         target_p=cmeta.target_accuracy,
     )
 
@@ -321,43 +445,6 @@ def calc_cv_accuracy(
     )
 
     return accuracy, duration
-
-
-def calc_cv_accuracy_no_early_stop(
-    rcca: pyntbci.classifiers.rCCA,
-    cmeta: ClassifierMeta,
-    V: np.ndarray,
-    X: np.ndarray,
-    y: np.ndarray,
-    n_folds: int = 4,
-) -> np.ndarray:
-
-    # Setup classifier
-    rcca = pyntbci.classifiers.rCCA(
-        stimulus=V,
-        fs=cmeta.sfreq,
-        event=cmeta.event,
-        onset_event=True,
-        encoding_length=cmeta.encoding_length,
-    )
-
-    # Cross-validation
-    folds = np.repeat(np.arange(n_folds), int(X.shape[0] / n_folds))
-    accuracy = np.zeros(n_folds)
-    duration = np.zeros(n_folds)
-
-    for i_fold in range(n_folds):
-
-        # Split folds
-        X_trn, y_trn = X[i_fold != folds, :, :], y[i_fold != folds]
-        X_tst, y_tst = X[i_fold == folds, :, :], y[i_fold == folds]
-
-        # Train classifier and stopping
-        rcca.fit(X_trn, y_trn)
-        yh = rcca.predict(X_tst)
-        accuracy[i_fold] = np.mean(yh == y_tst)
-
-    return accuracy
 
 
 if __name__ == "__main__":
