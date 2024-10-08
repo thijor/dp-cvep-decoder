@@ -139,7 +139,7 @@ class OnlineDecoder:
 
         self.input_sw: StreamWatcher | None = None
         # Will be derived once the input_sw is connected
-        self.input_sfreq: float | None = None
+        self.input_sfreq: int | None = None
         self.input_chs_info: list[dict[str, str]] | None = None
         self.input_mrk_sw: StreamWatcher | None = None
 
@@ -206,7 +206,7 @@ class OnlineDecoder:
         self.input_sw.connect_to_stream()
 
         # set derived properties
-        self.input_sfreq = self.input_sw.inlet.info().nominal_srate()
+        self.input_sfreq = int(self.input_sw.inlet.info().nominal_srate())
         self.pre_eval_start_n = int(self.pre_eval_start_s * self.input_sfreq)
         self.input_chs_info = [
             dict(ch_name=ch_name, type="EEG") for ch_name in self.input_sw.channel_names
