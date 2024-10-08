@@ -57,7 +57,7 @@ class OnlineDecoder:
 
     marker_stream_name : str | None
         Optional name of the marker stream. If a stream is provided, the projections will be synchronised
-        with the markers. Else,....fixed lenght epochs? Default is None.
+        with the markers. Else,....fixed length epochs? Default is None.
 
     decode_trigger_markers : list[str]
         List of markers to trigger a decoder evaluation. Only used if marker_stream_name is not None. Default is None.
@@ -84,7 +84,7 @@ class OnlineDecoder:
     selected_channels : list[str] | list[int] | None
         if a list of channel names is provided, data of only those channels will
         be processed. Default is None -> all channels are considered. If list of integers is provided, they are
-        interpreted as indeces.
+        interpreted as indices.
 
     """
 
