@@ -182,7 +182,7 @@ def create_classifier(
 
     # Load stimulus sequences
     V = np.repeat(
-        np.load(cfg["training"]["codes_file"])["codes"].T,
+        np.load(cfg["training"]["codes_file"])["codes"],
         int(cmeta.sfreq / cmeta.presentation_rate),
         axis=1,
     )
