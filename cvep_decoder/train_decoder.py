@@ -56,14 +56,22 @@ def load_raw_and_events(
 
     # select channels if specified
     if selected_channels is not None:
-        ch_names = [
-            ch["label"][0]
-            for ch in data[names.index(data_stream_name)]["info"]["desc"][0][
-                "channels"
-            ][0]["channel"]
-        ]
-        idx = [ch_names.index(ch) for ch in selected_channels]
-        x = x[:, idx]
+        if isinstance(selected_channels[0], str):
+            ch_names = [
+                ch["label"][0]
+                for ch in data[names.index(data_stream_name)]["info"]["desc"][0][
+                    "channels"
+                ][0]["channel"]
+            ]
+            selected_ch_idx = [ch_names.index(ch) for ch in selected_channels]
+        elif isinstance(selected_channels[0], int):
+            selected_ch_idx = selected_channels
+        else:
+            raise ValueError(
+                f"{selected_channels=} must be a list of `str` or `int` or `None`."
+            )
+        x = x[:, selected_ch_idx]
+
     sfreq = int(float(data[names.index(data_stream_name)]["info"]["nominal_srate"][0]))
 
     return x, events, sfreq
