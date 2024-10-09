@@ -327,6 +327,93 @@ class OnlineDecoder:
         else:
             return False
 
+    def update(self):
+
+        self.input_sw.update()
+        self.input_mrk_sw.update()
+
+        # check if decoding should start
+        if not self.is_decoding:
+            self.check_if_decoding_should_start()
+
+        else:
+            if time.time() - self.start_eval_time > self.max_eval_time_s:
+                logger.info(f"Stopping decoding after {self.max_eval_time_s=}")
+                self.is_decoding = False
+
+            else:
+                # Do the regular decoding if enough data received
+                # Enough new data -> evaluate classifier
+                if self.enough_data_for_next_prediction() and self.is_decoding:
+                    # validate that the number of samples that arrived at the
+                    # StreamWatcher is as expected by the LSL streams sampling
+                    # rate
+                    self.validate_num_samples()
+
+                    self._filter()
+
+                    x = self._create_epoch()
+
+                    xs = self._resample(
+                        x
+                    )  # required to align with codes for rCCA classifier
+
+                    self.classify(xs)
+
+    def check_if_decoding_should_start(self):
+        if self.input_mrk_sw is None:
+            logger.error(
+                "No marker stream connected, cannot start decoding based on markers"
+            )
+
+        if self.input_mrk_sw.n_new > 0:
+            markers = self.input_mrk_sw.unfold_buffer()[-self.input_mrk_sw.n_new:, 0]
+            # markers_t = self.input_mrk_sw.unfold_buffer_t()[-self.input_mrk_sw.n_new:]
+
+            # logger.debug(f"Checking for {self.start_eval_marker=}")
+            # logger.debug(f"Checking through {markers=}, {markers_t}")
+
+            if self.start_eval_marker in markers:
+                logger.debug(
+                    f"Starting decoding based on marker '{self.start_eval_marker}'"
+                )
+                self.is_decoding = True
+                self.start_eval_time = time.time()
+
+                # reset the buffers
+                logger.debug(
+                    f"Resetting buffers for decoding - using {self.pre_eval_start_n=}"
+                )
+                # Important note: only keep the lookback in the raw data,
+                # the filterbank will be populated during the loop
+                self.input_sw.n_new = self.pre_eval_start_n
+                self.filterbank.n_new = 0
+                self.input_mrk_sw.n_new = 0
+
+    def run(self) -> tuple[threading.Thread, threading.Event]:
+        stop_event = threading.Event()
+        thread = threading.Thread(
+            target=self._run_loop,
+            kwargs={"stop_event": stop_event},
+        )
+        thread.start()
+        logger.debug("Started the run loop")
+        return thread, stop_event
+
+    def validate_num_samples(self):
+        t = self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :]
+        dt = t[-1] - t[0]
+        nsamples_expected = int(np.round(dt * self.input_sfreq))
+
+        # allow 10% deviation
+        if np.abs((nsamples_expected - self.input_sw.n_new)) / nsamples_expected > 0.1:
+            logger.warning(
+                f"Number of samples in the buffer ({self.input_sw.n_new})"
+                f" is not as expected ({nsamples_expected}). This might"
+                " indicate a problem with the LSL stream sampling rate "
+                f"({self.input_sfreq=} is expected)."
+            )
+
     def _filter(self):
         if self.input_sw is None:
             logger.error(
@@ -404,84 +491,6 @@ class OnlineDecoder:
 
         return x
 
-    def check_if_decoding_should_start(self):
-        if self.input_mrk_sw is None:
-            logger.error(
-                "No marker stream connected, cannot start decoding based on markers"
-            )
-
-        if self.input_mrk_sw.n_new > 0:
-            markers = self.input_mrk_sw.unfold_buffer()[-self.input_mrk_sw.n_new :, 0]
-            # markers_t = self.input_mrk_sw.unfold_buffer_t()[-self.input_mrk_sw.n_new:]
-
-            # logger.debug(f"Checking for {self.start_eval_marker=}")
-            # logger.debug(f"Checking through {markers=}, {markers_t}")
-
-            if self.start_eval_marker in markers:
-                logger.debug(
-                    f"Starting decoding based on marker '{self.start_eval_marker}'"
-                )
-                self.is_decoding = True
-                self.start_eval_time = time.time()
-
-                # reset the buffers
-                logger.debug(
-                    f"Resetting buffers for decoding - using {self.pre_eval_start_n=}"
-                )
-                # Important note: only keep the lookback in the raw data,
-                # the filterbank will be populated during the loop
-                self.input_sw.n_new = self.pre_eval_start_n
-                self.filterbank.n_new = 0
-                self.input_mrk_sw.n_new = 0
-
-    def validate_num_samples(self):
-        t = self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :]
-        dt = t[-1] - t[0]
-        nsamples_expected = int(np.round(dt * self.input_sfreq))
-
-        # allow 10% deviation
-        if np.abs((nsamples_expected - self.input_sw.n_new)) / nsamples_expected > 0.1:
-            logger.warning(
-                f"Number of samples in the buffer ({self.input_sw.n_new})"
-                f" is not as expected ({nsamples_expected}). This might"
-                " indicate a problem with the LSL stream sampling rate "
-                f"({self.input_sfreq=} is expected)."
-            )
-
-    def update(self):
-
-        self.input_sw.update()
-        self.input_mrk_sw.update()
-
-        # check if decoding should start
-        if not self.is_decoding:
-            self.check_if_decoding_should_start()
-
-        else:
-            if time.time() - self.start_eval_time > self.max_eval_time_s:
-                logger.info(f"Stopping decoding after {self.max_eval_time_s=}")
-                self.is_decoding = False
-
-            else:
-                # Do the regular decoding if enough data received
-                # Enough new data -> evaluate classifier
-                if self.enough_data_for_next_prediction() and self.is_decoding:
-
-                    # validate that the number of samples that arrived at the
-                    # StreamWatcher is as expected by the LSL streams sampling
-                    # rate
-                    self.validate_num_samples()
-
-                    self._filter()
-
-                    x = self._create_epoch()
-
-                    xs = self._resample(
-                        x
-                    )  # required to align with codes for rCCA classifier
-
-                    self.classify(xs)
-
     def _classify(self, x: NDArray):  # (n_trials, n_channels, n_samples)
 
         logger.debug(
@@ -494,6 +503,7 @@ class OnlineDecoder:
         if y >= 0:
             logger.debug(f"Pushing prediction {y}")
             self.output_sw.push_sample([f"speller_select {y}"])
+            self.is_decoding = False
 
     def _run_loop(self, stop_event: threading.Event):
 
@@ -511,16 +521,6 @@ class OnlineDecoder:
             # logger.debug(f"Sleeping for {dt_sleep=}")
             sleep_s(dt_sleep)
             # logger.debug("Woke up from sleep")
-
-    def run(self) -> tuple[threading.Thread, threading.Event]:
-        stop_event = threading.Event()
-        thread = threading.Thread(
-            target=self._run_loop,
-            kwargs={"stop_event": stop_event},
-        )
-        thread.start()
-        logger.debug("Started the run loop")
-        return thread, stop_event
 
 
 def online_decoder_factory(
