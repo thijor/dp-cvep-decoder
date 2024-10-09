@@ -272,7 +272,7 @@ class OnlineDecoder:
             "MISC",
             channel_count=1,
             nominal_srate=pylsl.IRREGULAR_RATE,
-            channel_format="string",
+            channel_format="int64",
             source_id="output_stream_id",
         )
         self.output_sw = pylsl.StreamOutlet(info)
@@ -367,7 +367,7 @@ class OnlineDecoder:
             )
 
         if self.input_mrk_sw.n_new > 0:
-            markers = self.input_mrk_sw.unfold_buffer()[-self.input_mrk_sw.n_new:, 0]
+            markers = self.input_mrk_sw.unfold_buffer()[-self.input_mrk_sw.n_new :, 0]
             # markers_t = self.input_mrk_sw.unfold_buffer_t()[-self.input_mrk_sw.n_new:]
 
             # logger.debug(f"Checking for {self.start_eval_marker=}")
@@ -502,7 +502,7 @@ class OnlineDecoder:
         # If y=-1 then the classifier is not yet sufficiently certain to emit the classification
         if y >= 0:
             logger.debug(f"Pushing prediction {y}")
-            self.output_sw.push_sample([f"speller_select {y}"])
+            self.output_sw.push_sample([y])
             self.is_decoding = False
 
     def _run_loop(self, stop_event: threading.Event):
