@@ -125,6 +125,9 @@ class OnlineDecoder:
         self.curr_offset_nsamples = (
             offset_nsamples  # used if epochs are sliced by markers
         )
+        self.internal_decoding_start_time: float = (
+            time.time()
+        )  # used to check against timeout of single trial decodings
 
         self.start_eval_marker = start_eval_marker
         self.pre_eval_start_s = pre_eval_start_s
@@ -332,12 +335,14 @@ class OnlineDecoder:
         self.input_sw.update()
         self.input_mrk_sw.update()
 
+        logger.debug(f"Updating the decoder - {self.is_decoding=}")
+
         # check if decoding should start
         if not self.is_decoding:
             self.check_if_decoding_should_start()
 
         else:
-            if time.time() - self.start_eval_time > self.max_eval_time_s:
+            if time.time() - self.internal_decoding_start_time > self.max_eval_time_s:
                 logger.info(f"Stopping decoding after {self.max_eval_time_s=}")
                 self.is_decoding = False
 
@@ -368,6 +373,7 @@ class OnlineDecoder:
 
         if self.input_mrk_sw.n_new > 0:
             markers = self.input_mrk_sw.unfold_buffer()[-self.input_mrk_sw.n_new :, 0]
+            markers_t = self.input_mrk_sw.unfold_buffer_t()[-self.input_mrk_sw.n_new :]
             # markers_t = self.input_mrk_sw.unfold_buffer_t()[-self.input_mrk_sw.n_new:]
 
             # logger.debug(f"Checking for {self.start_eval_marker=}")
@@ -378,7 +384,15 @@ class OnlineDecoder:
                     f"Starting decoding based on marker '{self.start_eval_marker}'"
                 )
                 self.is_decoding = True
-                self.start_eval_time = time.time()
+
+                # get time stamp of start_eval_marker --> consider inputs for epoch from this onwards
+                idx = np.where(markers == self.start_eval_marker)[0]
+                self.start_eval_time = markers_t[idx]
+                self.internal_decoding_start_time = (
+                    time.time()
+                )  # to check against timeout
+
+                # logger.debug(f"{self.start_eval_time} set from {idx=} in {markers_t=}")
 
                 # reset the buffers
                 logger.debug(
@@ -423,11 +437,15 @@ class OnlineDecoder:
         if self.input_sw.n_new == 0:
             logger.debug("No new samples to filter")
         else:
+            raw = self.input_sw.unfold_buffer()[
+                -self.input_sw.n_new :, self.selected_ch_idx
+            ]
+            raw_t = self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :]
+            msk = raw_t > self.start_eval_time
+
             self.filterbank.filter(
-                self.input_sw.unfold_buffer()[
-                    -self.input_sw.n_new :, self.selected_ch_idx
-                ],
-                self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :],
+                raw[msk, :],
+                raw_t[msk],
             )
 
             # Lines for debugging only
@@ -502,7 +520,7 @@ class OnlineDecoder:
         # If y=-1 then the classifier is not yet sufficiently certain to emit the classification
         if y >= 0:
             logger.debug(f"Pushing prediction {y}")
-            self.output_sw.push_sample([y])
+            self.output_sw.push_sample([np.int64(y)])
             self.is_decoding = False
 
     def _run_loop(self, stop_event: threading.Event):
