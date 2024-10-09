@@ -28,8 +28,9 @@ class ClassifierMeta:
     event: str = "contrast"  # the event definition used for rCCA
     onset_event: bool = True  # whether to model an event for the onset of stimulation in each trial in rCCA
     encoding_length: float = 0.3  # the length of the modeled transient response(s) in rCCA
-    target_accuracy: float = 0.95  # the targeted accuracy used for early stop
     segment_time_s: float = 0.1  # the time used to incrementally grow trials in seconds
+    target_accuracy: float = 0.95  # the targeted accuracy used for early stop
+    max_time: float = 4.2  # the maximum trial time at which to force a decoding
 
 
 def load_raw_and_events(
@@ -79,8 +80,9 @@ def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
         event=cfg["training"]["decoder"]["event"],
         onset_event=cfg["training"]["decoder"]["onset_event"],
         encoding_length=cfg["training"]["decoder"]["encoding_length_s"],
-        target_accuracy=cfg["training"]["decoder"]["target_accuracy"],
         segment_time_s=cfg["training"]["decoder"]["segment_time_s"],
+        target_accuracy=cfg["training"]["decoder"]["target_accuracy"],
+        max_time=cfg["training"]["decoder"]["max_time_s"],
     )
 
 
@@ -284,6 +286,7 @@ def fit_rcca_model_early_stop(
         fs=cmeta.sfreq,
         segment_time=cmeta.segment_time_s,
         target_p=cmeta.target_accuracy,
+        max_time=cmeta.max_time,
     )
     stop.fit(X, y)
     return stop

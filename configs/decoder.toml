@@ -14,8 +14,9 @@ trial_marker = "start_trial"
 event = "contrast"
 onset_event = true
 encoding_length_s = 0.3
-target_accuracy = 0.95
 segment_time_s = 0.1
+target_accuracy = 0.95
+max_time_s = 4.2
 
 [training.features]
 tmin_s = 0.0
