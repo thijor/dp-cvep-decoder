@@ -400,6 +400,7 @@ def calc_cv_accuracy_early_stop(
         fs=cmeta.sfreq,
         segment_time=cmeta.segment_time_s,
         target_p=cmeta.target_accuracy,
+        max_time=cmeta.max_time,
     )
 
     # Cross-validation
