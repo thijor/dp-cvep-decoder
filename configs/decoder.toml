@@ -1,6 +1,7 @@
 [cvep]
 code_file = './'                         # path to file containing the cvep codes
 presentation_rate_hz = 60                       # presentation rate of the cvep stimulation
+capfile = ""
 
 [training]
 data_root = './data/'

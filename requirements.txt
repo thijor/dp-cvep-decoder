@@ -1,6 +1,7 @@
 dareplane_utils>=0.0.9
 fire>=0.7.0
 joblib>=1.4.2
+matplotlib>=3.9.2
 numpy>=1.26.4
 pylsl>=1.16.2
 pyntbci>=1.6.0

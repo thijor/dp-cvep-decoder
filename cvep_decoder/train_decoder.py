@@ -6,6 +6,7 @@ import re
 from dareplane_utils.logging.logger import get_logger
 from dareplane_utils.signal_processing.filtering import FilterBank
 import joblib
+import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
 import pyntbci
@@ -203,8 +204,12 @@ def create_classifier(
     stop = fit_rcca_model_early_stop(cmeta, X, y, V)
 
     # Cross-validation
-    acc, dur = calc_cv_accuracy_early_stop(cmeta, X, y, V)
+    n_folds = 4
+    acc, dur = calc_cv_accuracy_early_stop(cmeta, X, y, V, n_folds)
     logger.info(f"Cross-validation reached accuracy {acc=}, with durations {dur=}")
+
+    plot_rcca_model_early_stop(stop, acc, dur, n_folds, cfg)
+    plt.show()
 
     out_file = cfg["training"]["out_file"]
     out_file_meta = cfg["training"]["out_file_meta"]
@@ -457,6 +462,45 @@ def calc_cv_accuracy_early_stop(
     )
 
     return accuracy, duration
+
+
+def plot_rcca_model_early_stop(stop, acc, dur, n_folds, cfg):
+    fig, ax = plt.subplots(2, 2, figsize=(11.69, 5))
+
+    r = stop.estimator.r_.reshape((len(stop.estimator.events_), -1)).T
+    ax[0, 0].plot(np.arange(r.shape[0]) / stop.fs, r)
+    ax[0, 0].set_xlabel("time [s]")
+    ax[0, 0].set_ylabel("amplitude [a.u.]")
+    ax[0, 0].legend(stop.estimator.events_, bbox_to_anchor=(1.0, 1.0))
+    ax[0, 0].grid("both", alpha=0.1, color="k")
+    ax[0, 0].set_title("temporal response(s)")
+
+    if cfg["cvep"]["capfile"] == "":
+        ax[0, 1].plot(1 + np.arange(stop.estimator.w_.size), stop.estimator.w_)
+        ax[0, 1].set_xlabel("electrode")
+        ax[0, 1].set_ylabel("weight [a.u.]")
+    else:
+        pyntbci.plotting.topoplot(stop.estimator.w_, locfile=cfg["cvep"]["capfile"], ax=ax[0, 1])
+    ax[0, 1].set_title("spatial filter")
+
+    ax[1, 0].plot(np.arange(stop.margins_.size) * stop.segment_time, stop.margins_, label="threshold")
+    ax[1, 0].set_ylim([-0.05, 1.05])
+    ax[1, 0].set_xlabel("time [s]")
+    ax[1, 0].set_ylabel("margin")
+    ax[1, 0].legend(bbox_to_anchor=(1.0, 1.0))
+    ax[1, 0].grid("both", alpha=0.1, color="k")
+    ax[1, 0].set_title("stopping margins")
+
+    ax[1, 1].set_xticks([])
+    ax[1, 1].set_yticks([])
+    ax[1, 1].set_xlim([0, 1])
+    ax[1, 1].set_ylim([0, 1])
+    ax[1, 1].text(0.1, 0.6, f"Accuracy: {acc.mean():.3f}")
+    ax[1, 1].text(0.1, 0.4, f"Duration: {dur.mean():.3f}")
+    ax[1, 1].set_title(f"{n_folds:d}-fold cross-validation")
+
+    fig.tight_layout()
+    fig.canvas.manager.set_window_title("Calibrated classifier: close figure to continue")
 
 
 if __name__ == "__main__":
