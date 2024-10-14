@@ -275,7 +275,7 @@ class OnlineDecoder:
             "MISC",
             channel_count=1,
             nominal_srate=pylsl.IRREGULAR_RATE,
-            channel_format="int64",
+            channel_format=pylsl.cf_int8,
             source_id="output_stream_id",
         )
         self.output_sw = pylsl.StreamOutlet(info)
