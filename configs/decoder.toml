@@ -15,8 +15,9 @@ trial_marker = "start_trial"
 event = "contrast"
 onset_event = true
 encoding_length_s = 0.3
+stopping = "beta"
 segment_time_s = 0.1
-target_accuracy = 0.95
+target_accuracy = 0.999
 max_time_s = 4.2
 
 [training.features]
@@ -68,7 +69,7 @@ sleep_s = 0.1                            # time between updates in seconds
 lsl_stream_name = 'BioSemi'
 buffer_size_s = 5.0
 lsl_marker_stream_name = 'cvep-speller-stream'
-# selected_channels = ['C3', 'Cz', 'C4']   # channels to be used for decoding, use the names as they would appear in the lsl streams meta data
+# selected_channels = ['C3', 'Cz', 'C4']   # channels to be used for decoding, use the names as they would appear in the lsl streams metadata
 
 [online.output]
 lsl_stream_name = 'cvep-decoder-stream'

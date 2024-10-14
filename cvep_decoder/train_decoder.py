@@ -29,6 +29,7 @@ class ClassifierMeta:
     event: str = "contrast"  # the event definition used for rCCA
     onset_event: bool = True  # whether to model an event for the onset of stimulation in each trial in rCCA
     encoding_length: float = 0.3  # the length of the modeled transient response(s) in rCCA
+    stopping: str = "beta"  # stopping method to use
     segment_time_s: float = 0.1  # the time used to incrementally grow trials in seconds
     target_accuracy: float = 0.95  # the targeted accuracy used for early stop
     max_time: float = 4.2  # the maximum trial time at which to force a decoding
@@ -89,6 +90,7 @@ def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
         event=cfg["training"]["decoder"]["event"],
         onset_event=cfg["training"]["decoder"]["onset_event"],
         encoding_length=cfg["training"]["decoder"]["encoding_length_s"],
+        stopping=cfg["training"]["decoder"]["stopping"],
         segment_time_s=cfg["training"]["decoder"]["segment_time_s"],
         target_accuracy=cfg["training"]["decoder"]["target_accuracy"],
         max_time=cfg["training"]["decoder"]["max_time_s"],
@@ -267,7 +269,7 @@ def fit_rcca_model_early_stop(
     X: NDArray,
     y: NDArray,
     V: NDArray,
-) -> pyntbci.stopping.MarginStopping:
+) -> pyntbci.stopping.MarginStopping | pyntbci.stopping.DistributionStopping | pyntbci.stopping.CriterionStopping:
     """
     Fit an early stopping rCCA model on labeled training data.
 
@@ -284,7 +286,7 @@ def fit_rcca_model_early_stop(
 
     Returns
     -------
-    stop: pyntbci.stopping.MarginStopping
+    stop: pyntbci.stopping.MarginStopping | pyntbci.stopping.DistributionStopping | pyntbci.stopping.CriterionStopping
         A trained early stopping rCCA classifier.
     """
     rcca = pyntbci.classifiers.rCCA(
@@ -294,13 +296,33 @@ def fit_rcca_model_early_stop(
         onset_event=cmeta.onset_event,
         encoding_length=cmeta.encoding_length,
     )
-    stop = pyntbci.stopping.MarginStopping(
-        estimator=rcca,
-        fs=cmeta.sfreq,
-        segment_time=cmeta.segment_time_s,
-        target_p=cmeta.target_accuracy,
-        max_time=cmeta.max_time,
-    )
+    if cmeta.stopping == "margin":
+        stop = pyntbci.stopping.MarginStopping(
+            estimator=rcca,
+            fs=cmeta.sfreq,
+            segment_time=cmeta.segment_time_s,
+            target_p=cmeta.target_accuracy,
+            max_time=cmeta.max_time,
+        )
+    elif cmeta.stopping in ["beta", "norm"]:
+        stop = pyntbci.stopping.DistributionStopping(
+            estimator=rcca,
+            fs=cmeta.sfreq,
+            segment_time=cmeta.segment_time_s,
+            distribution=cmeta.stopping,
+            target_p=cmeta.target_accuracy,
+            max_time=cmeta.max_time,
+        )
+    elif cmeta.stopping == "accuracy":
+        stop = pyntbci.stopping.CriterionStopping(
+            estimator=rcca,
+            fs=cmeta.sfreq,
+            segment_time=cmeta.segment_time_s,
+            criterion="accuracy",
+            target=cmeta.target_accuracy,
+        )
+    else:
+        ValueError(f"Unknown stopping method: {cmeta.stopping}")
     stop.fit(X, y)
     return stop
 
@@ -333,20 +355,8 @@ def calc_cv_accuracy(
     accuracy: NDArray
         The vector of accuracies for each of the folds of shape (n_folds).
     """
-
-    # Setup classifier
-    rcca = pyntbci.classifiers.rCCA(
-        stimulus=V,
-        fs=cmeta.sfreq,
-        event=cmeta.event,
-        onset_event=cmeta.onset_event,
-        encoding_length=cmeta.encoding_length,
-    )
-
-    # Cross-validation
     folds = np.repeat(np.arange(n_folds), int(X.shape[0] / n_folds))
     accuracy = np.zeros(n_folds)
-
     for i_fold in range(n_folds):
 
         # Split folds
@@ -354,6 +364,7 @@ def calc_cv_accuracy(
         X_tst, y_tst = X[i_fold == folds, :, :], y[i_fold == folds]
 
         # Train classifier and stopping
+        rcca = fit_rcca_model(cmeta, X_trn, y_trn, V)
         rcca.fit(X_trn, y_trn)
         yh = rcca.predict(X_tst)
         accuracy[i_fold] = np.mean(yh == y_tst)
@@ -392,22 +403,6 @@ def calc_cv_accuracy_early_stop(
         The vector of trial durations for each of the folds of shape (n_folds).
     """
 
-    # Setup classifier
-    rcca = pyntbci.classifiers.rCCA(
-        stimulus=V,
-        fs=cmeta.sfreq,
-        event=cmeta.event,
-        onset_event=cmeta.onset_event,
-        encoding_length=cmeta.encoding_length,
-    )
-    stop = pyntbci.stopping.MarginStopping(
-        estimator=rcca,
-        fs=cmeta.sfreq,
-        segment_time=cmeta.segment_time_s,
-        target_p=cmeta.target_accuracy,
-        max_time=cmeta.max_time,
-    )
-
     # Cross-validation
     folds = np.repeat(np.arange(n_folds), int(np.ceil(X.shape[0] / n_folds)))[
         : X.shape[0]
@@ -422,6 +417,7 @@ def calc_cv_accuracy_early_stop(
         X_tst, y_tst = X[i_fold == folds, :, :], y[i_fold == folds]
 
         # Train classifier and stopping
+        stop = fit_rcca_model_early_stop(cmeta, X_trn, y_trn, V)
         stop.fit(X_trn, y_trn)
 
         # Loop trials
@@ -467,6 +463,7 @@ def calc_cv_accuracy_early_stop(
 def plot_rcca_model_early_stop(stop, acc, dur, n_folds, cfg):
     fig, ax = plt.subplots(2, 2, figsize=(11.69, 5))
 
+    # Transient response(s)
     r = stop.estimator.r_.reshape((len(stop.estimator.events_), -1)).T
     ax[0, 0].plot(np.arange(r.shape[0]) / stop.fs, r)
     ax[0, 0].set_xlabel("time [s]")
@@ -475,6 +472,7 @@ def plot_rcca_model_early_stop(stop, acc, dur, n_folds, cfg):
     ax[0, 0].grid("both", alpha=0.1, color="k")
     ax[0, 0].set_title("temporal response(s)")
 
+    # Spatial filter
     if cfg["cvep"]["capfile"] == "":
         ax[0, 1].plot(1 + np.arange(stop.estimator.w_.size), stop.estimator.w_)
         ax[0, 1].set_xlabel("electrode")
@@ -483,14 +481,19 @@ def plot_rcca_model_early_stop(stop, acc, dur, n_folds, cfg):
         pyntbci.plotting.topoplot(stop.estimator.w_, locfile=cfg["cvep"]["capfile"], ax=ax[0, 1])
     ax[0, 1].set_title("spatial filter")
 
-    ax[1, 0].plot(np.arange(stop.margins_.size) * stop.segment_time, stop.margins_, label="threshold")
-    ax[1, 0].set_ylim([-0.05, 1.05])
-    ax[1, 0].set_xlabel("time [s]")
-    ax[1, 0].set_ylabel("margin")
-    ax[1, 0].legend(bbox_to_anchor=(1.0, 1.0))
-    ax[1, 0].grid("both", alpha=0.1, color="k")
-    ax[1, 0].set_title("stopping margins")
+    # Stopping
+    if isinstance(stop, pyntbci.stopping.MarginStopping):
+        ax[1, 0].plot(np.arange(stop.margins_.size) * stop.segment_time, stop.margins_, label="threshold")
+        ax[1, 0].set_ylim([-0.05, 1.05])
+        ax[1, 0].set_xlabel("time [s]")
+        ax[1, 0].set_ylabel("margin")
+        ax[1, 0].legend(bbox_to_anchor=(1.0, 1.0))
+        ax[1, 0].grid("both", alpha=0.1, color="k")
+        ax[1, 0].set_title("stopping margins")
+    else:
+        ax[1, 0].set_axis_off()
 
+    # Cross-validated accuracy (and duration)
     ax[1, 1].set_xticks([])
     ax[1, 1].set_yticks([])
     ax[1, 1].set_xlim([0, 1])
