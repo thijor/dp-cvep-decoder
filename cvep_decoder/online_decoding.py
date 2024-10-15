@@ -509,13 +509,19 @@ class OnlineDecoder:
 
         return x
 
-    def _classify(self, x: NDArray):  # (n_trials, n_channels, n_samples)
+    def _classify(self, x: NDArray):  # (n_trials, n_channels, n_samples) N.B. n_trials=1
 
-        logger.debug(
-            f"Classifying for {x.shape=}"
-        )  # should be [1, n_channels, n_samples]
-        y = self.classifier.predict(x)[0]
-        logger.debug(f"Classified with prediction {y}")
+        if x.shape[2] < int(self.t_sleep_s * self.classifier_input_sfreq):
+            logger.debug(
+                f"Classifying skipped as no segment recorded yet ({x.shape[2]=})"
+            )
+            y = -1
+        else:
+            logger.debug(
+                f"Classifying for {x.shape=}"
+            )  # should be [1, n_channels, n_samples]
+            y = self.classifier.predict(x)[0]
+            logger.debug(f"Classified with prediction {y}")
 
         # If y=-1 then the classifier is not yet sufficiently certain to emit the classification
         if y >= 0:
