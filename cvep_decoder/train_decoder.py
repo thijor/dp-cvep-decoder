@@ -34,6 +34,7 @@ class ClassifierMeta:
     segment_time_s: float = 0.1  # the time used to incrementally grow trials in seconds
     target_accuracy: float = 0.95  # the targeted accuracy used for early stop
     max_time: float = 4.2  # the maximum trial time at which to force a decoding
+    cr: float = 1.0  # cost ratio for Bayesian dynamic stopping
 
 
 def load_raw_and_events(
@@ -324,6 +325,15 @@ def fit_rcca_model_early_stop(
             segment_time=cmeta.segment_time_s,
             criterion=cmeta.stopping,
             target=cmeta.target_accuracy,
+        )
+    elif cmeta.stopping in ["bds0", "bds1", "bds2"]:
+        stop = pyntbci.stopping.BayesStopping(
+            estimator=rcca,
+            fs=cmeta.sfreq,
+            segment_time=cmeta.segment_time_s,
+            method=cmeta.stopping,
+            cr=cmeta.cr,
+            max_time=cmeta.max_time,
         )
     else:
         ValueError(f"Unknown stopping method: {cmeta.stopping}")
