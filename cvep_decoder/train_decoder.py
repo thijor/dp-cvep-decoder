@@ -29,6 +29,7 @@ class ClassifierMeta:
     event: str = "contrast"  # the event definition used for rCCA
     onset_event: bool = True  # whether to model an event for the onset of stimulation in each trial in rCCA
     encoding_length: float = 0.3  # the length of the modeled transient response(s) in rCCA
+    ctmin: float = 0.0  # lag between LSL marker and hardware marker
     stopping: str = "beta"  # stopping method to use
     segment_time_s: float = 0.1  # the time used to incrementally grow trials in seconds
     target_accuracy: float = 0.95  # the targeted accuracy used for early stop
@@ -90,6 +91,7 @@ def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
         event=cfg["training"]["decoder"]["event"],
         onset_event=cfg["training"]["decoder"]["onset_event"],
         encoding_length=cfg["training"]["decoder"]["encoding_length_s"],
+        ctmin=cfg["training"]["decoder"]["tmin_s"],
         stopping=cfg["training"]["decoder"]["stopping"],
         segment_time_s=cfg["training"]["decoder"]["segment_time_s"],
         target_accuracy=cfg["training"]["decoder"]["target_accuracy"],
@@ -259,6 +261,7 @@ def fit_rcca_model(
         event=cmeta.event,
         onset_event=cmeta.onset_event,
         encoding_length=cmeta.encoding_length,
+        tmin=cmeta.ctmin,
     )
     rcca.fit(X, y)
     return rcca
@@ -295,6 +298,7 @@ def fit_rcca_model_early_stop(
         event=cmeta.event,
         onset_event=cmeta.onset_event,
         encoding_length=cmeta.encoding_length,
+        tmin=cmeta.ctmin,
     )
     if cmeta.stopping == "margin":
         stop = pyntbci.stopping.MarginStopping(
@@ -318,7 +322,7 @@ def fit_rcca_model_early_stop(
             estimator=rcca,
             fs=cmeta.sfreq,
             segment_time=cmeta.segment_time_s,
-            criterion="accuracy",
+            criterion=cmeta.stopping,
             target=cmeta.target_accuracy,
         )
     else:

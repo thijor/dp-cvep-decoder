@@ -15,6 +15,7 @@ trial_marker = "start_trial"
 event = "contrast"
 onset_event = true
 encoding_length_s = 0.3
+tmin_s = 0.0
 stopping = "beta"
 segment_time_s = 0.1
 target_accuracy = 0.999
