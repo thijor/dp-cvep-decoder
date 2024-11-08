@@ -38,6 +38,42 @@ class ClassifierMeta:
     trained: bool = False  # whether to train distribution stopping
 
 
+def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
+    return ClassifierMeta(
+        tmin=cfg["training"]["features"]["tmin_s"],
+        tmax=cfg["training"]["features"]["tmax_s"],
+        fband=cfg["training"]["features"]["passband_hz"],
+        sfreq=cfg["training"]["features"]["target_freq_hz"],
+        presentation_rate=cfg["cvep"]["presentation_rate_hz"],
+        selected_channels=cfg["training"]["features"].get("selected_channels", None),
+        event=cfg["training"]["decoder"]["event"],
+        onset_event=cfg["training"]["decoder"]["onset_event"],
+        encoding_length=cfg["training"]["decoder"]["encoding_length_s"],
+        ctmin=cfg["training"]["decoder"]["tmin_s"],
+        stopping=cfg["training"]["decoder"]["stopping"],
+        segment_time_s=cfg["training"]["decoder"]["segment_time_s"],
+        target_accuracy=cfg["training"]["decoder"]["target_accuracy"],
+        max_time=cfg["training"]["decoder"]["max_time_s"],
+        cr=cfg["training"]["decoder"]["cr"],
+        trained=cfg["training"]["decoder"]["trained"],
+    )
+
+
+def get_training_data_files(cfg: dict) -> list[Path]:
+    data_dir = Path(cfg["training"]["data_root"])
+    glob_pattern = cfg["training"]["training_files_glob"]
+
+    files = list(data_dir.rglob(glob_pattern))
+
+    if len(files) == 0:
+        logger.error(
+            f"Did not find files for training at {data_dir} with pattern '{glob_pattern}'"
+        )
+    logger.debug(f"Found {len(files)} files for training with pattern {glob_pattern}.")
+
+    return files
+
+
 def load_raw_and_events(
     fpath: Path,
     data_stream_name: str = "BioSemi",
@@ -82,41 +118,6 @@ def load_raw_and_events(
     return x, events, sfreq
 
 
-def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
-    return ClassifierMeta(
-        tmin=cfg["training"]["features"]["tmin_s"],
-        tmax=cfg["training"]["features"]["tmax_s"],
-        fband=cfg["training"]["features"]["passband_hz"],
-        sfreq=cfg["training"]["features"]["target_freq_hz"],
-        presentation_rate=cfg["cvep"]["presentation_rate_hz"],
-        selected_channels=cfg["training"]["features"].get("selected_channels", None),
-        event=cfg["training"]["decoder"]["event"],
-        onset_event=cfg["training"]["decoder"]["onset_event"],
-        encoding_length=cfg["training"]["decoder"]["encoding_length_s"],
-        ctmin=cfg["training"]["decoder"]["tmin_s"],
-        stopping=cfg["training"]["decoder"]["stopping"],
-        segment_time_s=cfg["training"]["decoder"]["segment_time_s"],
-        target_accuracy=cfg["training"]["decoder"]["target_accuracy"],
-        max_time=cfg["training"]["decoder"]["max_time_s"],
-        cr=cfg["training"]["decoder"]["cr"],
-        trained=cfg["training"]["decoder"]["trained"],
-    )
-
-
-def get_training_data_files(cfg: dict) -> list[Path]:
-    data_dir = Path(cfg["training"]["data_root"])
-    glob_pattern = cfg["training"]["training_files_glob"]
-
-    files = list(data_dir.rglob(glob_pattern))
-
-    if len(files) == 0:
-        logger.error(
-            f"Did not find files for training at {data_dir} with pattern '{glob_pattern}'"
-        )
-
-    return files
-
-
 # all options beyond cfg are for overwriting the config if necessary
 def create_classifier(
     data_root: Path | None = None,
@@ -146,11 +147,13 @@ def create_classifier(
         logger.error("No training files found - stopping fitting attempt")
         return 1
 
-    epo_list = []
-    for tfile in t_files:
+    eeg_list = []
+    lbl_list = []
+    for t_file in t_files:
 
+        # Load raw continuous data
         x, events, sfreq = load_raw_and_events(
-            fpath=tfile,
+            fpath=t_file,
             data_stream_name=cfg["training"]["features"]["data_stream_name"],
             marker_stream_name=cfg["training"]["features"]["lsl_marker_stream_name"],
             selected_channels=cfg["training"]["features"].get(
@@ -158,7 +161,7 @@ def create_classifier(
             ),
         )
 
-        # create filterbank
+        # Bandpass filter
         fb = FilterBank(
             bands={"band": cmeta.fband},
             sfreq=sfreq,
@@ -166,38 +169,30 @@ def create_classifier(
             n_in_channels=x.shape[1],
             filter_buffer_s=np.ceil(x.shape[0] / sfreq),
         )
-
         fb.filter(x, np.arange(x.shape[0]) / sfreq)
-
         xf = fb.get_data()[:, :, 0]
 
         # Slice data to trials
-        epo_events = events[events[:, 1] == cfg["training"]["trial_marker"]]
-        n_pre = int(-1 * cmeta.tmin * sfreq)
-        n_post = int(cmeta.tmax * sfreq)
-
-        epo_list += [
-            e[: (n_post + n_pre), :]  # slice epochs to correct length
-            for e in np.split(xf, epo_events[:, 0] - n_pre)[1:]
+        onsets = events[events[:, 1] == cfg["training"]["trial_marker"], 0]
+        eeg_list += [
+            xf[t - int(cmeta.tmin * sfreq):t + int(cmeta.tmax * sfreq), :]
+            for t in onsets
         ]
-    X = np.asarray(epo_list).transpose(0, 2, 1)
+
+        # Extract trial labels
+        lbl_list += [
+            int(m.split(";")[1].split("=")[1])
+            for m in events[:, 1]
+            if m.startswith(cfg["training"]["cue_marker"])]
+
+    # Concatenate trials
+    X = np.stack(eeg_list, axis=0).transpose(0, 2, 1)  # trials, channels, samples
+    y = np.stack(lbl_list, axis=0)  # trials
 
     # Resample
-    logger.debug(f"The training data X is of shape {X.shape} (n_trials x n_channels x n_samples) before resample")
     X = resample(X, num=int((cmeta.tmax - cmeta.tmin) * cmeta.sfreq), axis=2)
     if np.isnan(X).sum() > 0:
         logger.error("NaNs found after resampling")
-    logger.debug(f"The training data X is of shape {X.shape} (n_trials x n_channels x n_samples) after resample")
-
-    # Extract trial labels
-    y = np.array(
-        [
-            int(re.search(r'"target": (\d*)', e[1]).group(1))
-            for e in events
-            if '"target"' in e[1]
-        ]
-    )
-    logger.debug(f"The labels y is of shape: {y.shape} (n_trials)")
 
     # Load stimulus sequences
     V = np.repeat(
@@ -205,7 +200,10 @@ def create_classifier(
         int(cmeta.sfreq / cmeta.presentation_rate),
         axis=1,
     )
-    logger.debug(f"The stimulus V is of shape: {V.shape} (n_codes x n_samples)")
+
+    logger.debug(f"The data X are of shape {X.shape} (trials x channels x samples)")
+    logger.debug(f"The labels y are of shape {y.shape} (trials)")
+    logger.debug(f"The stimuli V are of shape: {V.shape} (codes x samples)")
 
     # Fit models of full data
     rcca = fit_rcca_model(cmeta, X, y, V)
@@ -214,18 +212,22 @@ def create_classifier(
     # Cross-validation
     n_folds = 4
     acc, dur = calc_cv_accuracy_early_stop(cmeta, X, y, V, n_folds)
-    logger.info(f"Cross-validation reached accuracy {acc=}, with durations {dur=}")
+    logger.info(
+        f"Cross-validated accuracy of {np.mean(acc):.3f} +/- {np.std(acc):.3f}"
+    )
+    logger.info(
+        f"Cross-validated duration of {np.mean(dur):.2f} +/- {np.std(dur):.2f}"
+    )
 
+    # Visualize classifier
     plot_rcca_model_early_stop(stop, acc, dur, n_folds, cfg)
     plt.show()
 
+    # Save classifier
     out_file = cfg["training"]["out_file"]
     out_file_meta = cfg["training"]["out_file_meta"]
-
-    # assert folders are there
     Path(out_file).parent.mkdir(parents=True, exist_ok=True)
     Path(out_file_meta).parent.mkdir(parents=True, exist_ok=True)
-
     joblib.dump(rcca, out_file)
     joblib.dump(stop, Path(out_file).with_suffix(".early_stop.joblib"))
     json.dump(asdict(cmeta), open(out_file_meta, "w"))
@@ -467,13 +469,6 @@ def calc_cv_accuracy_early_stop(
         # Compute performance
         accuracy[i_fold] = np.mean(yh_tst == y_tst)
         duration[i_fold] = np.mean(yh_dur)
-
-    logger.info(
-        f"Cross-validated accuracy of {np.mean(accuracy):.3f} +/- {np.std(accuracy):.3f}"
-    )
-    logger.info(
-        f"Cross-validated duration of {np.mean(duration):.2f} +/- {np.std(duration):.2f}"
-    )
 
     return accuracy, duration
 
