@@ -33,6 +33,7 @@ class ClassifierMeta:
     stopping: str = "beta"  # stopping method to use
     segment_time_s: float = 0.1  # the time used to incrementally grow trials in seconds
     target_accuracy: float = 0.95  # the targeted accuracy used for early stop
+    min_time: float = 0.1  # the minimum trial time from which decoding can occur
     max_time: float = 4.2  # the maximum trial time at which to force a decoding
     cr: float = 1.0  # cost ratio for Bayesian dynamic stopping
     trained: bool = False  # whether to train distribution stopping
@@ -53,6 +54,7 @@ def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
         stopping=cfg["training"]["decoder"]["stopping"],
         segment_time_s=cfg["training"]["decoder"]["segment_time_s"],
         target_accuracy=cfg["training"]["decoder"]["target_accuracy"],
+        min_time=cfg["training"]["decoder"]["min_time_s"],
         max_time=cfg["training"]["decoder"]["max_time_s"],
         cr=cfg["training"]["decoder"]["cr"],
         trained=cfg["training"]["decoder"]["trained"],
@@ -312,6 +314,7 @@ def fit_rcca_model_early_stop(
             fs=cmeta.sfreq,
             segment_time=cmeta.segment_time_s,
             target_p=cmeta.target_accuracy,
+            min_time=cmeta.min_time,
             max_time=cmeta.max_time,
         )
     elif cmeta.stopping in ["beta", "norm"]:
@@ -321,6 +324,7 @@ def fit_rcca_model_early_stop(
             segment_time=cmeta.segment_time_s,
             distribution=cmeta.stopping,
             target_p=cmeta.target_accuracy,
+            min_time=cmeta.min_time,
             max_time=cmeta.max_time,
             trained=cmeta.trained,
         )
@@ -331,6 +335,8 @@ def fit_rcca_model_early_stop(
             segment_time=cmeta.segment_time_s,
             criterion=cmeta.stopping,
             target=cmeta.target_accuracy,
+            min_time=cmeta.min_time,
+            max_time=cmeta.max_time,
         )
     elif cmeta.stopping in ["bds0", "bds1", "bds2"]:
         stop = pyntbci.stopping.BayesStopping(
@@ -339,6 +345,7 @@ def fit_rcca_model_early_stop(
             segment_time=cmeta.segment_time_s,
             method=cmeta.stopping,
             cr=cmeta.cr,
+            min_time=cmeta.min_time,
             max_time=cmeta.max_time,
         )
     else:
