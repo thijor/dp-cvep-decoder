@@ -20,10 +20,10 @@ def main(
     decoder = online_decoder_factory(conf_pth, preload=False)
 
     pcommand_map = {
-        "LOAD MODEL": decoder.load_model,
-        "CONNECT_DECODER": decoder.init_all,
-        "DECODE ONLINE": decoder.run,
         "FIT MODEL": create_classifier,
+        "LOAD MODEL": decoder.load_model,
+        "CONNECT DECODER": decoder.init_all,
+        "DECODE ONLINE": decoder.run,
     }
 
     server = DefaultServer(
