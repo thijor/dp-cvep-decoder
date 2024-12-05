@@ -228,7 +228,7 @@ def create_classifier(
     # Get the templates
     Ts = rcca.get_T().reshape(V.shape)
     
-    n_keys = cfg["training"]["number_of_keyboardkeys"]
+    n_keys = cfg["training"]["features"]["number_of_keys"]
 
     # Make best subset of codes.
     

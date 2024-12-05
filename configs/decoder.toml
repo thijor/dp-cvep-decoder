@@ -11,6 +11,7 @@ out_file_meta = './test_meta.json'
 codes_file = '../tests/assets/mgold_61_6521.npz'
 cue_marker = "start_cue"  # To extract label information from training data
 trial_marker = "start_trial"  # To extract onsets from any trials
+optimal_layout_file = "./cvep_speller/codes/layout.json"
 
 [training.decoder]
 event = "contrast"
@@ -26,6 +27,7 @@ cr = 1.0
 trained = false
 
 [training.features]
+number_of_keys = 63                      # Should be the number of keys on keyboard. Can be set to 0 if we want to skip the optimal subset.
 tmin_s = 0.0
 tmax_s = 4.2
 target_freq_hz = 120                     # should be aligned with codes for rCCA
