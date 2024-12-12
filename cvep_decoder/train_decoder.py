@@ -224,7 +224,7 @@ def create_classifier(
     # Visualize classifier
     plot_rcca_model_early_stop(stop, acc, dur, n_folds, cfg)
     plt.show()
-
+    
     # Swap out codes file if we have a different file selected for the online phase.
     if cfg["online"]["codes_file"] != cfg["training"]["codes_file"]:
 
@@ -397,9 +397,14 @@ def create_classifier(
     # Update model with updated codes order. 
     rcca.set_stimulus(V_optimal)
 
+    online_code_file = Path(cfg["online"]["codes_file"])
+
     # Write the optimal layout to store in JSON file so we can load in speller.
-    json_data = {"subset": subset.tolist(),
-                 "optimal_layout": optimal_layout.tolist()}
+    json_data = {   
+                    "online_file": online_code_file.name,
+                    "subset": subset.tolist(),
+                    "optimal_layout": optimal_layout.tolist()
+                    }
 
     optimal_layout_file = cfg["training"]["optimal_layout_file"] 
     with open(optimal_layout_file, 'w+') as outfile:
