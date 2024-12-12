@@ -225,14 +225,30 @@ def create_classifier(
     plot_rcca_model_early_stop(stop, acc, dur, n_folds, cfg)
     plt.show()
 
+    # Swap out codes file if we have a different file selected for the online phase.
+    if cfg["online"]["codes_file"] != cfg["training"]["codes_file"]:
+
+        V_new = np.repeat(
+        np.load(cfg["online"]["codes_file"])["codes"],
+        int(cmeta.sfreq / cmeta.presentation_rate),
+        axis=1,
+    )
+        logger.info("Different codeset for training and online phase detected.") 
+        logger.debug(f"New stimuli V are of shape: {V_new.shape} (codes x samples)")
+        rcca.set_stimulus(V_new)
+
+    
+    # Make optimal layout and subset of the selected online phase codes.
+    # Refetch The stimuli straight from the rcca 
+    V = rcca.stimulus
+
     # Get the templates
     Ts = rcca.get_T().reshape(V.shape)
     
     n_keys = cfg["training"]["features"]["number_of_keys"]
 
-    # Make best subset of codes.
     
-    # We only make a subset if we have less keys than code
+    # We only make a subset if we have less keys than codes
     if n_keys != 0 and n_keys < len(Ts):
         subset = pyntbci.stimulus.optimize_subset_clustering(Ts, n_keys)
         logger.debug(f"Creating optimal subset for {n_keys} keys using {len(Ts)} codes")
