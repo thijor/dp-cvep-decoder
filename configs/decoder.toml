@@ -70,6 +70,7 @@ selected_channels = [
  'A32']
 
 [online]
+codes_file = '../tests/assets/mgold_61_6521.npz' # Can be different than the training codes_file.
 sleep_s = 0.1                            # time between updates in seconds
 
 [online.input]
