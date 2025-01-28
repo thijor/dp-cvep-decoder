@@ -235,15 +235,15 @@ def create_classifier(
     )
         logger.info("Different codeset for training and online phase detected.") 
         logger.debug(f"New stimuli V are of shape: {V_new.shape} (codes x samples)")
-        rcca.set_stimulus(V_new)
+        stop.estimator.set_stimulus(V_new)
 
     
     # Make optimal layout and subset of the selected online phase codes.
     # Refetch The stimuli straight from the rcca 
-    V = rcca.stimulus
+    V = stop.estimator.stimulus
 
     # Get the templates
-    Ts = rcca.get_T().reshape(V.shape)
+    Ts = stop.estimator.get_T().reshape(V.shape)
     
     n_keys = cfg["training"]["features"]["number_of_keys"]
 
@@ -395,7 +395,7 @@ def create_classifier(
     
 
     # Update model with updated codes order. 
-    rcca.set_stimulus(V_optimal)
+    stop.estimator.set_stimulus(V_optimal)
 
     online_code_file = Path(cfg["online"]["codes_file"])
 
