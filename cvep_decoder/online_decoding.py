@@ -354,16 +354,11 @@ class OnlineDecoder:
                     # StreamWatcher is as expected by the LSL streams sampling
                     # rate
                     self.validate_num_samples()
-
                     self._filter()
-
                     x = self._create_epoch()
-
-                    xs = self._resample(
-                        x
-                    )  # required to align with codes for rCCA classifier
-
-                    self.classify(xs)
+                    if x.shape[2] > 0:
+                        xs = self._resample(x)
+                        self.classify(xs)
 
     def check_if_decoding_should_start(self):
         if self.input_mrk_sw is None:
@@ -443,10 +438,13 @@ class OnlineDecoder:
             raw_t = self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :]
             msk = raw_t > self.start_eval_time
 
-            self.filterbank.filter(
-                raw[msk, :],
-                raw_t[msk],
-            )
+            if msk.sum() > 0:
+                self.filterbank.filter(
+                    raw[msk, :],
+                    raw_t[msk],
+                )
+            else:
+                logger.debug("Encountered an empty mask.")
 
             # Lines for debugging only
             # t = self.input_sw.unfold_buffer_t()[-self.input_sw.n_new :]
