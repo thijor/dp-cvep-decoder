@@ -27,14 +27,13 @@ cr = 1.0
 trained = false
 
 [training.features]
-number_of_keys = 63                      # Should be the number of keys on keyboard. Can be set to 0 if we want to skip the optimal subset.
+number_of_keys = 53
 tmin_s = 0.0
 tmax_s = 4.2
-target_freq_hz = 120                     # should be aligned with codes for rCCA
+target_freq_hz = 120
 passband_hz = [6, 40]
 data_stream_name = 'BioSemi'
 lsl_marker_stream_name = 'cvep-speller-stream'
-# selected_channels = ['C3', 'Cz', 'C4']   # If provided, only the mne.io.RawArray object will be filtered for these channels 
 selected_channels = [
  'A1',
  'A2',
