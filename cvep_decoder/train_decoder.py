@@ -223,7 +223,7 @@ def create_classifier(
     # Visualize classifier
     plot_rcca_model_early_stop(model, acc, dur, n_folds, cfg)
     plt.show()  # halts here until click away
-    
+
     # Swap out codes file if we have a different file selected for the online phase.
     if cfg["online"]["codes_file"] != cfg["training"]["codes_file"]:
         V = np.repeat(
@@ -231,141 +231,83 @@ def create_classifier(
             int(cmeta.sfreq / cmeta.presentation_rate),
             axis=1,
         )
-        logger.info("Different codeset for training and online phase detected.") 
+        logger.info("Different codeset for training and online phase detected.")
         logger.debug(f"New stimuli V are of shape: {V.shape} (codes x samples)")
         model.estimator.set_stimulus(V)
 
     # Optimize subset of codes
     n_keys = cfg["training"]["features"]["number_of_keys"]
     if n_keys != 0 and n_keys < V.shape[0]:
-        Ts = model.estimator.get_T(V.shape[1])
+        Ts = model.estimator.get_T(V.shape[1])[:, 0, :]  # select component
         subset = pyntbci.stimulus.optimize_subset_clustering(Ts, n_keys)
-        logger.debug(f"Creating optimal subset for {n_keys} keys using {len(Ts)} codes")
+        logger.debug(f"Created optimal subset for {n_keys} keys using {len(Ts)} codes")
     else:
         subset = np.array([i for i in range(n_keys)])  # Mockup "subset" which is just the 0:n_keys-1.
-        logger.debug("Skipping optimal subset (Number of keys equals number of codes or Number of keys is set to 0)")
+        logger.debug("Skipped optimal subset (Number of keys equals number of codes or Number of keys is set to 0)")
     V = V[subset, :]  # select optimal code subset
     model.estimator.set_stimulus(V)
 
-    # Here are two ugly dictionaries containing a key:[n_neighbours] relationship.
+    # Hardcoded dictionaries containing a key:[n_neighbours] relationship, with only east and south neighbours
     # TODO Should probably just store this in a JSON or ideally come-up with some non-hardcoded method.
-    if n_keys == 63:
-        keyboard_dict = {
-            0: [1, 13, 12],
-            1: [12, 13, 14, 2],
-            2: [13, 14, 15, 3],
-            3: [14, 15, 16, 4],
-            4: [15, 16, 17, 5],
-            5: [16, 17, 18, 6],
-            6: [17, 18, 19, 7],
-            7: [18, 19, 20, 8],
-            8: [19, 20, 21, 9],
-            9: [20, 21, 22, 10],
-            10: [21, 22, 23, 11],
-            11: [22, 23],
-            12: [13, 24, 25],
-            13: [24, 25, 26, 14],
-            14: [25, 26, 27, 15],
-            15: [26, 27 ,28, 16],
-            16: [27, 28, 29 ,17],
-            17: [28, 29, 30, 18],
-            18: [29, 30, 31, 19],
-            19: [30, 31, 32, 20],
-            20: [31, 32, 33, 21],
-            21: [32, 33, 34, 22],
-            22: [33, 34, 35, 23],
-            23: [34, 35],
-            24: [36, 37, 25],
-            25: [36, 37, 38, 26],
-            26: [37, 38, 39, 27],
-            27: [38, 39, 40, 28],
-            28: [39, 40, 41, 29],
-            29: [40, 41, 42, 30],
-            30: [41, 42 ,43, 31],
-            31: [42, 43, 44, 32],
-            32: [43, 44, 45 ,33],
-            33: [44 ,45 ,46, 34],
-            34: [45, 46, 47, 35],
-            35: [46, 47],
-            36: [48, 49, 37],
-            37: [48, 49, 50, 38],
-            38: [49, 50, 51, 39],
-            39: [50, 51, 52, 40],
-            40: [51, 52, 53, 41],
-            41: [52, 53, 54, 42],
-            42: [53, 54, 55, 43],
-            43: [54, 55, 56, 44],
-            44: [55, 56, 57, 45],
-            45: [56, 57, 58, 46],
-            46: [57, 58, 59, 47],
-            47: [58, 59],
-            48: [49],
-            49: [50],
-            50: [51],
-            51: [52],
-            52: [60, 53],
-            53: [60, 61, 54],
-            54: [60, 61, 62, 55],
-            55: [61, 62, 56],
-            56: [62, 57],
-            57: [58],
-            58: [59],
-            60: [61],
-            61: [62],
-        }
+    keyboard_dict = {
+        0:  [1, 13],
+        1:  [2, 13, 14],
+        2:  [3, 14, 15],
+        3:  [4, 15, 16],
+        4:  [5, 16, 17],
+        5:  [6, 17, 18],
+        6:  [7, 18, 19],
+        7:  [8, 19, 20],
+        8:  [9, 20, 21],
+        9:  [10, 21, 22],
+        10: [11, 22, 23],
+        11: [22, 23, 24],
+        12: [24],
+        13: [14, 25, 26],
+        14: [15, 26, 27],
+        15: [16, 27, 28],
+        16: [17, 28, 29],
+        17: [18, 29, 30],
+        18: [19, 30, 31],
+        19: [20, 31, 32],
+        20: [21, 32, 33],
+        21: [22, 33, 34],
+        22: [23, 34, 35],
+        23: [24, 35, 36],
+        24: [36, 37],
+        25: [26, 38],
+        26: [27, 38, 39],
+        27: [28, 39, 40],
+        28: [29, 40, 41],
+        29: [30, 41, 42],
+        30: [31, 42, 43],
+        31: [32, 43, 44],
+        32: [33, 44, 45],
+        33: [34, 45, 46],
+        34: [35, 46, 47],
+        35: [36, 47, 48],
+        36: [37, 48],
+        37: [],
+        38: [39],
+        39: [40],
+        40: [41],
+        41: [42, 49],
+        42: [43, 49, 50],
+        43: [44, 50, 51],
+        44: [45, 51, 52],
+        45: [46, 52],
+        46: [47],
+        47: [48],
+        48: [],
+        49: [50],
+        50: [51],
+        51: [52],
+        52: [],
+    }
+    if n_keys == 53:
+        pass
     else:
-        keyboard_dict = {
-            0:[1,13,14],
-            1:[2,13,14,15],
-            2:[3,14,15,16],
-            3:[4,15,16,17],
-            4:[5,16,17,18],
-            5:[6,17,18,19],
-            6:[7,18,19,20],
-            7:[8,19,20,21],
-            8:[9,20,21,22],
-            9:[10,21,22,23],
-            10:[11,22,23,24],
-            11:[12,23,24,25],
-            12:[24,25],
-            13:[14,26],
-            14:[15,26,27],
-            15:[16,26,27,28],
-            16:[17,27,28,29],
-            17:[18,28,29,30],
-            18:[19,29,30,31],
-            19:[20,30,31,32],
-            20:[21,31,32,33],
-            21:[22,32,33,34],
-            22:[23,33,34,35],
-            23:[24,34,35,36],
-            24:[25,35,36,37],
-            25:[36,37],
-            26:[27,38],
-            27:[28,38,39],
-            28:[29,38,39,40],
-            29:[30,39,40,41],
-            30:[31,40,41,42],
-            31:[32,41,42,43],
-            32:[33,42,43,44],
-            33:[34,43,44,45],
-            34:[35,44,45,46],
-            35:[36,45,46,47],
-            36:[37,46,47,48],
-            37:[47,48],
-            38:[39],
-            39:[40],
-            40:[41],
-            41:[42,49],
-            42:[43,49,50],
-            43:[44,50,51],
-            44:[45,51],
-            45:[46],
-            46:[47],
-            47:[48],
-            49:[50],
-            50:[51]
-        }
+        keyboard_dict = dict()
 
     # Convert the hard-coded dict into nd.array of shape (neighbours, 2)
     neighbour_set = []
@@ -373,19 +315,19 @@ def create_classifier(
         for neighbour in neighbours:
             neighbour_set.append([key, neighbour])
     neighbours = np.array(neighbour_set)
-    
+
     # Optimal layout of codes
-    Ts = model.estimator.get_T(V.shape[1])
+    Ts = model.estimator.get_T(V.shape[1])[:, 0, :]  # select component
     layout = pyntbci.stimulus.optimize_layout_incremental(Ts, neighbours)
     V = V[layout, :]  # order codes with optimal layout
     model.estimator.set_stimulus(V)
+    logger.debug(f"Created optimal layout for {n_keys} keys using {len(Ts)} codes")
 
     # Save classifier
     out_file = cfg["training"]["out_file"]
     Path(out_file).parent.mkdir(parents=True, exist_ok=True)
-    with open(out_file, "w") as fid:
-        joblib.dump(model, fid)
-        logger.info(f"Classifier saved to {out_file}")
+    joblib.dump(model, out_file)
+    logger.info(f"Classifier saved to {out_file}")
 
     # Save classifier meta
     out_file_meta = cfg["training"]["out_file_meta"]
