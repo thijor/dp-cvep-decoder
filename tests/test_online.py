@@ -120,7 +120,7 @@ def test_connection_to_stream(
 def test_outlet_creation(spawn_lsl_data_stream, provide_cvep_decoder):
 
     cvd = provide_cvep_decoder
-    cvd.create_output_stream()
+    cvd.create_decoder_stream()
 
     streams = pylsl.resolve_byprop("name", "test_cvep_decoder", timeout=1)
     assert len(streams) == 1
@@ -308,7 +308,7 @@ def test_running_loop(provide_running_decoder):
 
     # read from the output stream
     inlet = pylsl.StreamInlet(
-        pylsl.resolve_byprop("name", cvd.output_stream_name, timeout=1)[0]
+        pylsl.resolve_byprop("name", cvd.decoder_stream_name, timeout=1)[0]
     )
     samples, sample_times = inlet.pull_chunk()
 

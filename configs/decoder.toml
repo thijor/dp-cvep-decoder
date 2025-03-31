@@ -1,19 +1,29 @@
-[cvep]
-code_file = './'                         # path to file containing the cvep codes
-presentation_rate_hz = 60                       # presentation rate of the cvep stimulation
-capfile = "./cvep_decoder/caps/biosemi32.loc"
+[streams]
+data_stream_name = 'BioSemi'
+marker_stream_name = 'cvep-speller-stream'
+decoder_stream_name = 'cvep-decoder-stream'
+buffer_size_s = 5.0
 
-[training]
+[stimulus]
+presentation_rate_hz = 60
+cue_marker = "start_cue"  # To extract label information
+trial_marker = "start_trial"  # To extract trial onsets
+n_keys = 53
+tmin_s = 0.0
+tmax_s = 4.2
+
+[data]
 data_root = './data/'
 training_files_glob = 'sub-P001_ses-S001*.xdf'   # looked up in data_root
-out_file = './test.joblib'
-out_file_meta = './test_meta.json'
-codes_file = '../tests/assets/mgold_61_6521.npz'
-cue_marker = "start_cue"  # To extract label information from training data
-trial_marker = "start_trial"  # To extract onsets from any trials
-optimal_layout_file = "./cvep_speller/codes/layout.json"
+selected_channels = ["EX1", "EX2", "EX3", "EX4", "EX5", "EX6", "EX7"]
+capfile = "./cvep_decoder/caps/thielen7.loc"
+target_freq_hz = 120
+passband_hz = [6, 40]
 
-[training.decoder]
+[decoder]
+decoder_file = './decoder.joblib'
+decoder_meta_file = './decoder_meta.json'
+decoder_subset_layout_file = "./cvep_speller/codes/decoder_subset_layout.json"
 event = "contrast"
 onset_event = true
 encoding_length_s = 0.3
@@ -26,83 +36,10 @@ max_time_s = 4.0
 cr = 1.0
 trained = false
 
-[training.features]
-number_of_keys = 53
-tmin_s = 0.0
-tmax_s = 4.2
-target_freq_hz = 120
-passband_hz = [6, 40]
-data_stream_name = 'BioSemi'
-lsl_marker_stream_name = 'cvep-speller-stream'
-selected_channels = [
- 'A1',
- 'A2',
- 'A3',
- 'A4',
- 'A5',
- 'A6',
- 'A7',
- 'A8',
- 'A9',
- 'A10',
- 'A11',
- 'A12',
- 'A13',
- 'A14',
- 'A15',
- 'A16',
- 'A17',
- 'A18',
- 'A19',
- 'A20',
- 'A21',
- 'A22',
- 'A23',
- 'A24',
- 'A25',
- 'A26',
- 'A27',
- 'A28',
- 'A29',
- 'A30',
- 'A31',
- 'A32']
+[training]
+codes_file = '../tests/assets/mgold_61_6521.npz'
 
 [online]
-codes_file = '../tests/assets/mgold_61_6521.npz' # Can be different than the training codes_file.
-sleep_s = 0.1                            # time between updates in seconds
-
-[online.input]
-lsl_stream_name = 'BioSemi'
-buffer_size_s = 5.0
-lsl_marker_stream_name = 'cvep-speller-stream'
-# selected_channels = ['C3', 'Cz', 'C4']   # channels to be used for decoding, use the names as they would appear in the lsl streams metadata
-
-[online.output]
-lsl_stream_name = 'cvep-decoder-stream'
-buffer_size_s = 1.0
-
-[online.classifier]
-file = './test.joblib'
-meta_file = './test_meta.json'      # contains meta info about the model, including the expected input `sfreq` and frequency `band` for the classifier
-
-[online.eval]
-eval_after_type = 'time'                  # 'time', 'nsamples', or 'marker' (if marker, the marker config section must be present)
-eval_after_s = 0.05                       # time after which the model is evaluated - should be different from online.sleep_s!
-eval_after_nsamples = 10                  # number of samples after which the model is evaluated
-
-[online.eval.start]
-marker = "1"                               # marker that triggers the start of continuous evaluation, will look at the `lsl_marker_stream_name`
-max_time_s = 10                            # maximum time for continuous evaluation
-pre_eval_start_s = 0.0                     # time before the start marker that is still considered for decoding 
-
-# Optional: Only required if triggering evals on markers is asked for
-[online.eval.marker]
-trigger_marker = ["2", "3"]             # each marker appearance in the list will trigger an evaluation, will look at the `lsl_marker_stream_name`
-
-
-[online.early_stop]
-# TBD
-
-
-
+codes_file = '../tests/assets/mgold_61_6521.npz'
+sleep_s = 0.1  # time between updates in seconds
+max_eval_time_s = 10  # maximum time for continuous evaluation

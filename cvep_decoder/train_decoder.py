@@ -41,36 +41,34 @@ class ClassifierMeta:
 
 def classifier_meta_from_cfg(cfg: dict) -> ClassifierMeta:
     return ClassifierMeta(
-        tmin=cfg["training"]["features"]["tmin_s"],
-        tmax=cfg["training"]["features"]["tmax_s"],
-        fband=cfg["training"]["features"]["passband_hz"],
-        sfreq=cfg["training"]["features"]["target_freq_hz"],
-        presentation_rate=cfg["cvep"]["presentation_rate_hz"],
-        selected_channels=cfg["training"]["features"].get("selected_channels", None),
-        event=cfg["training"]["decoder"]["event"],
-        onset_event=cfg["training"]["decoder"]["onset_event"],
-        encoding_length=cfg["training"]["decoder"]["encoding_length_s"],
-        ctmin=cfg["training"]["decoder"]["tmin_s"],
-        stopping=cfg["training"]["decoder"]["stopping"],
-        segment_time_s=cfg["training"]["decoder"]["segment_time_s"],
-        target_accuracy=cfg["training"]["decoder"]["target_accuracy"],
-        min_time=cfg["training"]["decoder"]["min_time_s"],
-        max_time=cfg["training"]["decoder"]["max_time_s"],
-        cr=cfg["training"]["decoder"]["cr"],
-        trained=cfg["training"]["decoder"]["trained"],
+        tmin=cfg["stimulus"]["tmin_s"],
+        tmax=cfg["stimulus"]["tmax_s"],
+        presentation_rate=cfg["stimulus"]["presentation_rate_hz"],
+        fband=cfg["data"]["passband_hz"],
+        sfreq=cfg["data"]["target_freq_hz"],
+        selected_channels=cfg["data"].get("selected_channels", None),
+        event=cfg["decoder"]["event"],
+        onset_event=cfg["decoder"]["onset_event"],
+        encoding_length=cfg["decoder"]["encoding_length_s"],
+        ctmin=cfg["decoder"]["tmin_s"],
+        stopping=cfg["decoder"]["stopping"],
+        segment_time_s=cfg["decoder"]["segment_time_s"],
+        target_accuracy=cfg["decoder"]["target_accuracy"],
+        min_time=cfg["decoder"]["min_time_s"],
+        max_time=cfg["decoder"]["max_time_s"],
+        cr=cfg["decoder"]["cr"],
+        trained=cfg["decoder"]["trained"],
     )
 
 
 def get_training_data_files(cfg: dict) -> list[Path]:
-    data_dir = Path(cfg["training"]["data_root"])
-    glob_pattern = cfg["training"]["training_files_glob"]
+    data_root = Path(cfg["data"]["data_root"])
+    glob_pattern = cfg["data"]["training_files_glob"]
 
-    files = list(data_dir.rglob(glob_pattern))
+    files = list(data_root.rglob(glob_pattern))
 
     if len(files) == 0:
-        logger.error(
-            f"Did not find files for training at {data_dir} with pattern '{glob_pattern}'"
-        )
+        logger.error(f"Did not find files for training at {data_root} with pattern '{glob_pattern}'.")
     logger.debug(f"Found {len(files)} files for training with pattern {glob_pattern}.")
 
     return files
@@ -93,26 +91,20 @@ def load_raw_and_events(
     evd = data[names.index(marker_stream_name)]
     raw_ts = data[names.index(data_stream_name)]["time_stamps"]
     idx_in_raw = [np.argmin(np.abs(raw_ts - ts)) for ts in evd["time_stamps"]]
-    events = np.vstack(
-        [idx_in_raw, np.asarray([e[0] for e in evd["time_series"]], dtype="object")]
-    ).T
+    events = np.vstack([idx_in_raw, np.asarray([e[0] for e in evd["time_series"]], dtype="object")]).T
 
     # select channels if specified
     if selected_channels is not None:
         if isinstance(selected_channels[0], str):
             ch_names = [
                 ch["label"][0]
-                for ch in data[names.index(data_stream_name)]["info"]["desc"][0][
-                    "channels"
-                ][0]["channel"]
+                for ch in data[names.index(data_stream_name)]["info"]["desc"][0]["channels"][0]["channel"]
             ]
             selected_ch_idx = [ch_names.index(ch) for ch in selected_channels]
         elif isinstance(selected_channels[0], int):
             selected_ch_idx = selected_channels
         else:
-            raise ValueError(
-                f"{selected_channels=} must be a list of `str` or `int` or `None`."
-            )
+            raise ValueError(f"{selected_channels=} must be a list of `str` or `int` or `None`.")
         x = x[:, selected_ch_idx]
 
     sfreq = int(float(data[names.index(data_stream_name)]["info"]["nominal_srate"][0]))
@@ -131,13 +123,13 @@ def create_classifier(
     cfg = toml.load("./configs/decoder.toml")
     # Apply overwrites
     if data_root is not None:
-        cfg["training"]["data_root"] = data_root
+        cfg["data"]["data_root"] = data_root
     if training_files_glob is not None:
-        cfg["training"]["training_files_glob"] = training_files_glob
+        cfg["data"]["training_files_glob"] = training_files_glob
     if out_file is not None:
-        cfg["training"]["out_file"] = out_file
+        cfg["decoder"]["decoder_file"] = out_file
     if out_file_meta is not None:
-        cfg["training"]["out_file_meta"] = out_file_meta
+        cfg["decoder"]["decoder_meta_file"] = out_file_meta
 
     logger.setLevel(10)
 
@@ -156,11 +148,9 @@ def create_classifier(
         # Load raw continuous data
         x, events, sfreq = load_raw_and_events(
             fpath=t_file,
-            data_stream_name=cfg["training"]["features"]["data_stream_name"],
-            marker_stream_name=cfg["training"]["features"]["lsl_marker_stream_name"],
-            selected_channels=cfg["training"]["features"].get(
-                "selected_channels", None
-            ),
+            marker_stream_name=cfg["streams"]["marker_stream_name"],
+            data_stream_name=cfg["streams"]["data_stream_name"],
+            selected_channels=cfg["data"].get("selected_channels", None),
         )
 
         # Bandpass filter
@@ -175,7 +165,7 @@ def create_classifier(
         xf = fb.get_data()[:, :, 0]
 
         # Slice data to trials
-        onsets = events[events[:, 1] == cfg["training"]["trial_marker"], 0]
+        onsets = events[events[:, 1] == cfg["stimulus"]["trial_marker"], 0]
         eeg_list += [
             xf[t - int(cmeta.tmin * sfreq):t + int(cmeta.tmax * sfreq), :]
             for t in onsets
@@ -185,7 +175,7 @@ def create_classifier(
         lbl_list += [
             int(m.split(";")[1].split("=")[1])
             for m in events[:, 1]
-            if m.startswith(cfg["training"]["cue_marker"])]
+            if m.startswith(cfg["stimulus"]["cue_marker"])]
 
     # Concatenate trials
     X = np.stack(eeg_list, axis=0).transpose(0, 2, 1)  # trials, channels, samples
@@ -213,12 +203,8 @@ def create_classifier(
     # Cross-validation for performance estimation
     n_folds = 4
     acc, dur = calc_cv_accuracy_early_stop(cmeta, X, y, V, n_folds)
-    logger.info(
-        f"Cross-validated accuracy of {np.mean(acc):.3f} +/- {np.std(acc):.3f}"
-    )
-    logger.info(
-        f"Cross-validated duration of {np.mean(dur):.2f} +/- {np.std(dur):.2f}"
-    )
+    logger.info(f"Cross-validated accuracy of {np.mean(acc):.3f} +/- {np.std(acc):.3f}")
+    logger.info(f"Cross-validated duration of {np.mean(dur):.2f} +/- {np.std(dur):.2f}")
 
     # Visualize classifier
     plot_rcca_model_early_stop(model, acc, dur, n_folds, cfg)
@@ -236,7 +222,7 @@ def create_classifier(
         model.estimator.set_stimulus(V)
 
     # Optimize subset of codes
-    n_keys = cfg["training"]["features"]["number_of_keys"]
+    n_keys = cfg["stimulus"]["n_keys"]
     if n_keys != 0 and n_keys < V.shape[0]:
         Ts = model.estimator.get_T(V.shape[1])[:, 0, :]  # select component
         subset = pyntbci.stimulus.optimize_subset_clustering(Ts, n_keys)
@@ -324,13 +310,13 @@ def create_classifier(
     logger.debug(f"Created optimal layout for {n_keys} keys using {len(Ts)} codes")
 
     # Save classifier
-    out_file = cfg["training"]["out_file"]
+    out_file = cfg["decoder"]["decoder_file"]
     Path(out_file).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, out_file)
     logger.info(f"Classifier saved to {out_file}")
 
     # Save classifier meta
-    out_file_meta = cfg["training"]["out_file_meta"]
+    out_file_meta = cfg["decoder"]["decoder_meta_file"]
     Path(out_file_meta).parent.mkdir(parents=True, exist_ok=True)
     with open(out_file_meta, "w") as fid:
         json.dump(asdict(cmeta), fid)
@@ -342,7 +328,7 @@ def create_classifier(
         "subset": subset.tolist(),
         "layout": layout.tolist(),
     }
-    out_file = cfg["training"]["optimal_layout_file"]
+    out_file = cfg["decoder"]["decoder_subset_layout_file"]
     with open(out_file, "w") as fid:
         json.dump(json_data, fid)
         logger.info(f"Subset and layout saved to {out_file}")
@@ -377,7 +363,7 @@ def fit_rcca_model(
     """
     rcca = pyntbci.classifiers.rCCA(
         stimulus=V,
-        fs=cmeta.sfreq,
+        fs=int(cmeta.sfreq),
         event=cmeta.event,
         onset_event=cmeta.onset_event,
         encoding_length=cmeta.encoding_length,
@@ -414,7 +400,7 @@ def fit_rcca_model_early_stop(
     """
     rcca = pyntbci.classifiers.rCCA(
         stimulus=V,
-        fs=cmeta.sfreq,
+        fs=int(cmeta.sfreq),
         event=cmeta.event,
         onset_event=cmeta.onset_event,
         encoding_length=cmeta.encoding_length,
@@ -423,7 +409,7 @@ def fit_rcca_model_early_stop(
     if cmeta.stopping == "margin":
         stop = pyntbci.stopping.MarginStopping(
             estimator=rcca,
-            fs=cmeta.sfreq,
+            fs=int(cmeta.sfreq),
             segment_time=cmeta.segment_time_s,
             target_p=cmeta.target_accuracy,
             min_time=cmeta.min_time,
@@ -432,7 +418,7 @@ def fit_rcca_model_early_stop(
     elif cmeta.stopping in ["beta", "norm"]:
         stop = pyntbci.stopping.DistributionStopping(
             estimator=rcca,
-            fs=cmeta.sfreq,
+            fs=int(cmeta.sfreq),
             segment_time=cmeta.segment_time_s,
             distribution=cmeta.stopping,
             target_p=cmeta.target_accuracy,
@@ -443,7 +429,7 @@ def fit_rcca_model_early_stop(
     elif cmeta.stopping == "accuracy":
         stop = pyntbci.stopping.CriterionStopping(
             estimator=rcca,
-            fs=cmeta.sfreq,
+            fs=int(cmeta.sfreq),
             segment_time=cmeta.segment_time_s,
             criterion=cmeta.stopping,
             target=cmeta.target_accuracy,
@@ -453,7 +439,7 @@ def fit_rcca_model_early_stop(
     elif cmeta.stopping in ["bds0", "bds1", "bds2"]:
         stop = pyntbci.stopping.BayesStopping(
             estimator=rcca,
-            fs=cmeta.sfreq,
+            fs=int(cmeta.sfreq),
             segment_time=cmeta.segment_time_s,
             method=cmeta.stopping,
             cr=cmeta.cr,
@@ -605,12 +591,12 @@ def plot_rcca_model_early_stop(stop, acc, dur, n_folds, cfg):
     ax[0, 0].set_title("temporal response(s)")
 
     # Spatial filter
-    if cfg["cvep"]["capfile"] == "":
+    if cfg["data"]["capfile"] == "":
         ax[0, 1].plot(1 + np.arange(stop.estimator.w_.size), stop.estimator.w_)
         ax[0, 1].set_xlabel("electrode")
         ax[0, 1].set_ylabel("weight [a.u.]")
     else:
-        pyntbci.plotting.topoplot(stop.estimator.w_, locfile=cfg["cvep"]["capfile"], ax=ax[0, 1])
+        pyntbci.plotting.topoplot(stop.estimator.w_, locfile=cfg["data"]["capfile"], ax=ax[0, 1])
     ax[0, 1].set_title("spatial filter")
 
     # Stopping
