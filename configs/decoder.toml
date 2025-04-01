@@ -16,7 +16,7 @@ tmax_s = 4.2
 data_root = './data/'
 training_files_glob = 'sub-P001_ses-S001*.xdf'   # looked up in data_root
 selected_channels = ["EX1", "EX2", "EX3", "EX4", "EX5", "EX6", "EX7"]
-capfile = "./cvep_decoder/caps/thielen7.loc"
+capfile = "./cvep_decoder/caps/biosemi7.loc"
 target_freq_hz = 120
 passband_hz = [6, 40]
 
