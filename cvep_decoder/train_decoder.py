@@ -164,8 +164,15 @@ def create_classifier(
         fb.filter(x, np.arange(x.shape[0]) / sfreq)
         xf = fb.get_data()[:, :, 0]
 
-        # Slice data to trials
+        # Extract marker onsets
         onsets = events[events[:, 1] == cfg["stimulus"]["trial_marker"], 0]
+
+        # Add padding interval to catch filtering artefacts
+        if cfg["streams"]["padding_size_s"] is not None and cfg["streams"]["padding_size_s"] > 0:
+            pad = int(cfg["streams"]["padding_size_s"] * sfreq)
+            onsets -= pad
+
+        # Slice data to trials including padding interval to remove filtering artefacts
         eeg_list += [
             xf[t - int(cmeta.tmin * sfreq):t + int(cmeta.tmax * sfreq), :]
             for t in onsets
@@ -185,6 +192,11 @@ def create_classifier(
     X = resample(X, num=int((cmeta.tmax - cmeta.tmin) * cmeta.sfreq), axis=2)
     if np.isnan(X).sum() > 0:
         logger.error("NaNs found after resampling")
+
+    # Remove padding interval to catch filtering artefacts
+    if cfg["streams"]["padding_size_s"] is not None and cfg["streams"]["padding_size_s"] > 0:
+        pad = int(cfg["streams"]["padding_size_s"] * cmeta.sfreq)
+        X = X[:, :, pad:]
 
     # Load stimulus sequences
     V = np.repeat(

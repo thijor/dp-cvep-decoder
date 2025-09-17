@@ -63,6 +63,7 @@ class OnlineDecoder:
             data_stream_name: str,
             decoder_stream_name: str,
             buffer_size_s: float,
+            padding_size_s: float,
             start_eval_marker: str,
             max_eval_time_s: float = 10,
             t_sleep_s: float = 0.1,
@@ -75,6 +76,7 @@ class OnlineDecoder:
         self.data_stream_name = data_stream_name
         self.decoder_stream_name = decoder_stream_name
         self.buffer_size_s = buffer_size_s
+        self.padding_size_s = padding_size_s
         self.start_eval_marker = start_eval_marker
         self.max_eval_time_s = max_eval_time_s
         self.t_sleep_s = t_sleep_s
@@ -266,11 +268,17 @@ class OnlineDecoder:
         x = self.filterbank.get_data()[:, :, 0]
         t = self.input_sw.unfold_buffer_t()
 
-        # Select only samples from start_eval_marker onwards
+        # Find marker onset timepoint
         idx = np.argmin(np.abs(t - self.start_eval_time))
-        x = x[idx:, :]
 
-        x = x.T[None, :, :]  # (1, n_channels, n_samples)
+        # Add padding interval to catch filtering artefacts
+        if self.padding_size_s is not None and self.padding_size_s > 0:
+            pad = int(self.input_sfreq * self.padding_size_s)
+            idx -= pad
+            logger.debug(f"Added {pad} samples padding to catch filter artfacts")
+
+        # Select trial relevant data
+        x = x[idx:, :].T[None, :, :]  # (1, n_channels, n_samples)
         logger.debug(f"Created epoch of shape {x.shape} (n_trials x n_channels x n_samples).")
 
         if np.isnan(x).sum() > 0:
@@ -288,6 +296,12 @@ class OnlineDecoder:
                 axis=2,
             )
             logger.debug(f"The data x is of shape {x.shape} (n_trials x n_channels x n_samples) after resample.")
+
+            # Remove padding interval to catch filtering artefacts
+            if self.padding_size_s is not None and self.padding_size_s > 0:
+                pad = int(self.classifier_input_sfreq * self.padding_size_s)
+                x = x[:, :, pad:]
+                logger.debug(f"Removed {pad} samples padding to catch filter artfacts")
 
             if np.isnan(x).sum() > 0:
                 logger.error("NaNs found after resampling")
@@ -339,6 +353,7 @@ def online_decoder_factory(
         data_stream_name=cfg["streams"]["data_stream_name"],
         decoder_stream_name=cfg["streams"]["decoder_stream_name"],
         buffer_size_s=cfg["streams"]["buffer_size_s"],
+        padding_size_s=cfg["streams"]["padding_size_s"],
         start_eval_marker=cfg["stimulus"]["trial_marker"],
         max_eval_time_s=cfg["online"]["max_eval_time_s"],
         selected_channels=cfg["data"].get("selected_channels", None),

@@ -3,6 +3,7 @@ data_stream_name = 'BioSemi'
 marker_stream_name = 'cvep-speller-stream'
 decoder_stream_name = 'cvep-decoder-stream'
 buffer_size_s = 5.0
+padding_size_s = 0.5
 
 [stimulus]
 presentation_rate_hz = 60
