@@ -198,17 +198,14 @@ def create_classifier(
     logger.debug(f"The stimuli V are of shape: {V.shape} (codes x samples)")
 
     # Fit model on training data
-    model = fit_rcca_model_early_stop(cmeta, X, y, V)
+    model = get_rcca_model_early_stop(cmeta, V)
+    model.fit(X, y)
 
     # Cross-validation for performance estimation
     n_folds = 4
     acc, dur = calc_cv_accuracy_early_stop(cmeta, X, y, V, n_folds)
     logger.info(f"Cross-validated accuracy of {np.mean(acc):.3f} +/- {np.std(acc):.3f}")
     logger.info(f"Cross-validated duration of {np.mean(dur):.2f} +/- {np.std(dur):.2f}")
-
-    # Visualize classifier
-    plot_rcca_model_early_stop(model, acc, dur, n_folds, cfg)
-    plt.show()  # halts here until click away
 
     # Swap out codes file if we have a different file selected for the online phase.
     if cfg["online"]["codes_file"] != cfg["training"]["codes_file"]:
@@ -333,13 +330,15 @@ def create_classifier(
         json.dump(json_data, fid)
         logger.info(f"Subset and layout saved to {out_file}")
 
+    # Visualize classifier
+    plot_rcca_model_early_stop(model, acc, dur, n_folds, cfg)
+    plt.show()  # halts here until the figure is closed
+
     return 0
 
 
-def fit_rcca_model(
+def get_rcca_model(
     cmeta: ClassifierMeta,
-    X: NDArray,
-    y: NDArray,
     V: NDArray,
 ) -> pyntbci.classifiers.rCCA:
     """
@@ -349,17 +348,13 @@ def fit_rcca_model(
     ----------
     cmeta: ClassifierMeta
         The classifier hyperparameters.
-    X: NDArray
-        The EEG data matrix of shape (n_trials x n_channels x n_samples).
-    y: NDArray
-        The label vector of shape (n_trials).
     V: NDArray
         The stimulus matrix of shape (n_codes x n_samples).
 
     Returns
     -------
     rcca: pyntbci.classifiers.rCCA
-        A trained rCCA classifier.
+        An untrained trained rCCA classifier.
     """
     rcca = pyntbci.classifiers.rCCA(
         stimulus=V,
@@ -369,14 +364,11 @@ def fit_rcca_model(
         encoding_length=cmeta.encoding_length,
         tmin=cmeta.ctmin,
     )
-    rcca.fit(X, y)
     return rcca
 
 
-def fit_rcca_model_early_stop(
+def get_rcca_model_early_stop(
     cmeta: ClassifierMeta,
-    X: NDArray,
-    y: NDArray,
     V: NDArray,
 ) -> pyntbci.stopping.MarginStopping | pyntbci.stopping.DistributionStopping | pyntbci.stopping.CriterionStopping:
     """
@@ -386,26 +378,15 @@ def fit_rcca_model_early_stop(
     ----------
     cmeta: ClassifierMeta
         The classifier hyperparameters.
-    X: NDArray
-        The EEG data matrix of shape (n_trials x n_channels x n_samples).
-    y: NDArray
-        The label vector of shape (n_trials).
     V: NDArray
         The stimulus matrix of shape (n_codes x n_samples).
 
     Returns
     -------
     stop: pyntbci.stopping.MarginStopping | pyntbci.stopping.DistributionStopping | pyntbci.stopping.CriterionStopping
-        A trained early stopping rCCA classifier.
+        An untrained early stopping rCCA classifier.
     """
-    rcca = pyntbci.classifiers.rCCA(
-        stimulus=V,
-        fs=int(cmeta.sfreq),
-        event=cmeta.event,
-        onset_event=cmeta.onset_event,
-        encoding_length=cmeta.encoding_length,
-        tmin=cmeta.ctmin,
-    )
+    rcca = get_rcca_model()
     if cmeta.stopping == "margin":
         stop = pyntbci.stopping.MarginStopping(
             estimator=rcca,
@@ -448,7 +429,6 @@ def fit_rcca_model_early_stop(
         )
     else:
         ValueError(f"Unknown stopping method: {cmeta.stopping}")
-    stop.fit(X, y)
     return stop
 
 
@@ -489,7 +469,7 @@ def calc_cv_accuracy(
         X_tst, y_tst = X[i_fold == folds, :, :], y[i_fold == folds]
 
         # Train classifier and stopping
-        rcca = fit_rcca_model(cmeta, X_trn, y_trn, V)
+        rcca = get_rcca_model(cmeta, V)
         rcca.fit(X_trn, y_trn)
         yh = rcca.predict(X_tst)
         accuracy[i_fold] = np.mean(yh == y_tst)
@@ -542,7 +522,7 @@ def calc_cv_accuracy_early_stop(
         X_tst, y_tst = X[i_fold == folds, :, :], y[i_fold == folds]
 
         # Train classifier and stopping
-        stop = fit_rcca_model_early_stop(cmeta, X_trn, y_trn, V)
+        stop = get_rcca_model_early_stop(cmeta, V)
         stop.fit(X_trn, y_trn)
 
         # Loop trials
