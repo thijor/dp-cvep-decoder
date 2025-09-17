@@ -267,8 +267,8 @@ class OnlineDecoder:
         t = self.input_sw.unfold_buffer_t()
 
         # Select only samples from start_eval_marker onwards
-        msk = t >= self.start_eval_time
-        x = x[msk, :]
+        idx = np.argmin(np.abs(t - self.start_eval_time))
+        x = x[idx:, :]
 
         x = x.T[None, :, :]  # (1, n_channels, n_samples)
         logger.debug(f"Created epoch of shape {x.shape} (n_trials x n_channels x n_samples).")
