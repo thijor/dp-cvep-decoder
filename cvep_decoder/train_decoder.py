@@ -398,7 +398,7 @@ def get_rcca_model_early_stop(
     stop: pyntbci.stopping.MarginStopping | pyntbci.stopping.DistributionStopping | pyntbci.stopping.CriterionStopping
         An untrained early stopping rCCA classifier.
     """
-    rcca = get_rcca_model()
+    rcca = get_rcca_model(cmeta, V)
     if cmeta.stopping == "margin":
         stop = pyntbci.stopping.MarginStopping(
             estimator=rcca,
