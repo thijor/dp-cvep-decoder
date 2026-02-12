@@ -233,9 +233,8 @@ def create_classifier(
     # Optimize subset of codes
     n_keys = cfg["stimulus"]["n_keys"]
     if n_keys != 0 and n_keys < V.shape[0]:
-        Ts = model.estimator.get_T(V.shape[1])[:, 0, :]  # select component
-        subset = pyntbci.stimulus.optimize_subset_clustering(Ts, n_keys)
-        logger.debug(f"Created optimal subset for {n_keys} keys using {len(Ts)} codes")
+        subset = pyntbci.stimulus.optimize_subset_clustering(model.estimator.Ts_, n_keys)
+        logger.debug(f"Created optimal subset for {n_keys} keys using {len(model.estimator.Ts_)} codes")
     else:
         subset = np.array([i for i in range(n_keys)])  # Mockup "subset" which is just the 0:n_keys-1.
         logger.debug("Skipped optimal subset (Number of keys equals number of codes or Number of keys is set to 0)")
@@ -312,11 +311,10 @@ def create_classifier(
     neighbours = np.array(neighbour_set)
 
     # Optimal layout of codes
-    Ts = model.estimator.get_T(V.shape[1])[:, 0, :]  # select component
-    layout = pyntbci.stimulus.optimize_layout_incremental(Ts, neighbours)
+    layout = pyntbci.stimulus.optimize_layout_incremental(model.estimator.Ts_, neighbours)
     V = V[layout, :]  # order codes with optimal layout
     model.estimator.set_stimulus(V)
-    logger.debug(f"Created optimal layout for {n_keys} keys using {len(Ts)} codes")
+    logger.debug(f"Created optimal layout for {n_keys} keys using {len(model.estimator.Ts_)} codes")
 
     # Save classifier
     out_file = cfg["decoder"]["decoder_file"]
