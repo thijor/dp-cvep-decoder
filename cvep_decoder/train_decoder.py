@@ -233,7 +233,7 @@ def create_classifier(
     # Optimize subset of codes
     n_keys = cfg["stimulus"]["n_keys"]
     if n_keys != 0 and n_keys < V.shape[0]:
-        subset = pyntbci.stimulus.optimize_subset_clustering(model.estimator.Ts_, n_keys)
+        subset = pyntbci.stimulus.optimize_subset_clustering(model.estimator.Ts_[:, 0, :], n_keys)
         logger.debug(f"Created optimal subset for {n_keys} keys using {len(model.estimator.Ts_)} codes")
     else:
         subset = np.array([i for i in range(n_keys)])  # Mockup "subset" which is just the 0:n_keys-1.
@@ -311,7 +311,7 @@ def create_classifier(
     neighbours = np.array(neighbour_set)
 
     # Optimal layout of codes
-    layout = pyntbci.stimulus.optimize_layout_incremental(model.estimator.Ts_, neighbours)
+    layout = pyntbci.stimulus.optimize_layout_incremental(model.estimator.Ts_[:, 0, :], neighbours)
     V = V[layout, :]  # order codes with optimal layout
     model.estimator.set_stimulus(V)
     logger.debug(f"Created optimal layout for {n_keys} keys using {len(model.estimator.Ts_)} codes")
