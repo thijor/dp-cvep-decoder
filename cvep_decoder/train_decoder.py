@@ -199,6 +199,7 @@ def create_classifier(
         X = X[:, :, pad:]
 
     # Load stimulus sequences
+    n_keys = cfg["stimulus"]["n_keys"]
     V = np.repeat(
         np.load(cfg["training"]["codes_file"])["codes"],
         int(cmeta.sfreq / cmeta.presentation_rate),
@@ -215,108 +216,114 @@ def create_classifier(
 
     # Cross-validation for performance estimation
     n_folds = 4
-    acc, dur = calc_cv_accuracy_early_stop(cmeta, X, y, V, n_folds)
+    acc, dur = calc_cv_accuracy_early_stop(cmeta, X, y, V[:n_keys, :], n_folds)
     logger.info(f"Cross-validated accuracy of {np.mean(acc):.3f} +/- {np.std(acc):.3f}")
     logger.info(f"Cross-validated duration of {np.mean(dur):.2f} +/- {np.std(dur):.2f}")
 
-    # Swap out codes file if we have a different file selected for the online phase.
+    # Set online codes
     if cfg["online"]["codes_file"] != cfg["training"]["codes_file"]:
+        logger.info("Different codeset for training and online phase detected.")
         V = np.repeat(
             np.load(cfg["online"]["codes_file"])["codes"],
             int(cmeta.sfreq / cmeta.presentation_rate),
             axis=1,
         )
-        logger.info("Different codeset for training and online phase detected.")
         logger.debug(f"New stimuli V are of shape: {V.shape} (codes x samples)")
         model.estimator.set_stimulus(V)
 
-    # Optimize subset of codes
-    n_keys = cfg["stimulus"]["n_keys"]
-    if n_keys != 0 and n_keys < V.shape[0]:
-        Ts = model.estimator.get_T(V.shape[1])[:, 0, :]  # select component
-        subset = pyntbci.stimulus.optimize_subset_clustering(Ts, n_keys)
-        logger.debug(f"Created optimal subset for {n_keys} keys using {len(Ts)} codes")
+    # Set subset of codes
+    if cfg["training"]["optimize_subset"]:
+        if n_keys != 0 and n_keys < V.shape[0]:
+            Ts = model.estimator.get_T(2 * model.estimator.stimulus.shape[1])[:, 0, :]  # select component
+            subset = pyntbci.stimulus.optimize_subset_clustering(Ts, n_keys)
+            model.estimator.set_stimulus(model.estimator.stimulus[subset, :])  # set subset
+            logger.debug(f"Created optimal subset for {n_keys} keys using {Ts.shape[0]} codes")
+        else:
+            subset = np.arange(n_keys)
+            logger.debug("Skipped optimal subset (Number of keys equals number of codes or Number of keys is set to 0)")
     else:
-        subset = np.array([i for i in range(n_keys)])  # Mockup "subset" which is just the 0:n_keys-1.
-        logger.debug("Skipped optimal subset (Number of keys equals number of codes or Number of keys is set to 0)")
-    V = V[subset, :]  # select optimal code subset
-    model.estimator.set_stimulus(V)
+        subset = np.arange(n_keys)
+        model.estimator.set_stimulus(model.estimator.stimulus[subset, :])  # set subset
 
-    # Hardcoded dictionaries containing a key:[n_neighbours] relationship, with only east and south neighbours
-    # TODO Should probably just store this in a JSON or ideally come-up with some non-hardcoded method.
-    keyboard_dict = {
-        0:  [1, 13],
-        1:  [2, 13, 14],
-        2:  [3, 14, 15],
-        3:  [4, 15, 16],
-        4:  [5, 16, 17],
-        5:  [6, 17, 18],
-        6:  [7, 18, 19],
-        7:  [8, 19, 20],
-        8:  [9, 20, 21],
-        9:  [10, 21, 22],
-        10: [11, 22, 23],
-        11: [22, 23, 24],
-        12: [24],
-        13: [14, 25, 26],
-        14: [15, 26, 27],
-        15: [16, 27, 28],
-        16: [17, 28, 29],
-        17: [18, 29, 30],
-        18: [19, 30, 31],
-        19: [20, 31, 32],
-        20: [21, 32, 33],
-        21: [22, 33, 34],
-        22: [23, 34, 35],
-        23: [24, 35, 36],
-        24: [36, 37],
-        25: [26, 38],
-        26: [27, 38, 39],
-        27: [28, 39, 40],
-        28: [29, 40, 41],
-        29: [30, 41, 42],
-        30: [31, 42, 43],
-        31: [32, 43, 44],
-        32: [33, 44, 45],
-        33: [34, 45, 46],
-        34: [35, 46, 47],
-        35: [36, 47, 48],
-        36: [37, 48],
-        37: [],
-        38: [39],
-        39: [40],
-        40: [41],
-        41: [42, 49],
-        42: [43, 49, 50],
-        43: [44, 50, 51],
-        44: [45, 51, 52],
-        45: [46, 52],
-        46: [47],
-        47: [48],
-        48: [],
-        49: [50],
-        50: [51],
-        51: [52],
-        52: [],
-    }
-    if n_keys == 53:
-        pass
+    # Set layout of codes
+    if cfg["training"]["optimize_layout"]:
+        # Hardcoded dictionaries containing a key:[n_neighbours] relationship, with only east and south neighbours
+        # TODO Should probably just store this in a JSON or ideally come-up with some non-hardcoded method.
+        keyboard_dict = {
+            0:  [1, 13],
+            1:  [2, 13, 14],
+            2:  [3, 14, 15],
+            3:  [4, 15, 16],
+            4:  [5, 16, 17],
+            5:  [6, 17, 18],
+            6:  [7, 18, 19],
+            7:  [8, 19, 20],
+            8:  [9, 20, 21],
+            9:  [10, 21, 22],
+            10: [11, 22, 23],
+            11: [22, 23, 24],
+            12: [24],
+            13: [14, 25, 26],
+            14: [15, 26, 27],
+            15: [16, 27, 28],
+            16: [17, 28, 29],
+            17: [18, 29, 30],
+            18: [19, 30, 31],
+            19: [20, 31, 32],
+            20: [21, 32, 33],
+            21: [22, 33, 34],
+            22: [23, 34, 35],
+            23: [24, 35, 36],
+            24: [36, 37],
+            25: [26, 38],
+            26: [27, 38, 39],
+            27: [28, 39, 40],
+            28: [29, 40, 41],
+            29: [30, 41, 42],
+            30: [31, 42, 43],
+            31: [32, 43, 44],
+            32: [33, 44, 45],
+            33: [34, 45, 46],
+            34: [35, 46, 47],
+            35: [36, 47, 48],
+            36: [37, 48],
+            37: [],
+            38: [39],
+            39: [40],
+            40: [41],
+            41: [42, 49],
+            42: [43, 49, 50],
+            43: [44, 50, 51],
+            44: [45, 51, 52],
+            45: [46, 52],
+            46: [47],
+            47: [48],
+            48: [],
+            49: [50],
+            50: [51],
+            51: [52],
+            52: [],
+        }
+        if n_keys == 53:
+            pass
+        else:
+            keyboard_dict = dict()
+
+        # Convert the hard-coded dict into nd.array of shape (neighbours, 2)
+        neighbour_set = []
+        for key, neighbours in keyboard_dict.items():
+            for neighbour in neighbours:
+                neighbour_set.append([key, neighbour])
+        neighbours = np.array(neighbour_set)
+
+        # Optimal layout of codes
+        Ts = model.estimator.get_T(2 * model.estimator.stimulus.shape[1])[:, 0, :]  # select component
+        layout = pyntbci.stimulus.optimize_layout_incremental(Ts, neighbours)
+        model.estimator.set_stimulus(model.estimator.stimulus[layout, :])  # set layout
+        logger.debug(f"Created optimal layout for {n_keys} keys using {Ts.shape[0]} codes")
     else:
-        keyboard_dict = dict()
-
-    # Convert the hard-coded dict into nd.array of shape (neighbours, 2)
-    neighbour_set = []
-    for key, neighbours in keyboard_dict.items():
-        for neighbour in neighbours:
-            neighbour_set.append([key, neighbour])
-    neighbours = np.array(neighbour_set)
-
-    # Optimal layout of codes
-    Ts = model.estimator.get_T(V.shape[1])[:, 0, :]  # select component
-    layout = pyntbci.stimulus.optimize_layout_incremental(Ts, neighbours)
-    V = V[layout, :]  # order codes with optimal layout
-    model.estimator.set_stimulus(V)
-    logger.debug(f"Created optimal layout for {n_keys} keys using {len(Ts)} codes")
+        layout = np.arange(n_keys)
+        model.estimator.set_stimulus(model.estimator.stimulus[layout, :])  # set layout
 
     # Save classifier
     out_file = cfg["decoder"]["decoder_file"]
@@ -331,7 +338,7 @@ def create_classifier(
         json.dump(asdict(cmeta), fid)
         logger.info(f"Classifier meta data saved to {out_file_meta}")
 
-    # Save the optimal subset and layout
+    # Save the subset and layout
     json_data = {
         "codes_file": Path(cfg["online"]["codes_file"]).name,
         "subset": subset.tolist(),

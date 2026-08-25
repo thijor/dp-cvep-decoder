@@ -39,6 +39,8 @@ trained = false
 
 [training]
 codes_file = '../tests/assets/mgold_61_6521.npz'
+subset_optimization = false
+layout_optimization = false
 
 [online]
 codes_file = '../tests/assets/mgold_61_6521.npz'
