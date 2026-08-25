@@ -1,10 +1,9 @@
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
-import re
 
-from dareplane_utils.logging.logger import get_logger
 from dareplane_utils.signal_processing.filtering import FilterBank
+from dareplane_utils.logging.logger import get_logger
 import joblib
 import matplotlib.pyplot as plt
 import numpy as np
