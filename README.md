@@ -1,30 +1,35 @@
 # Dareplane c-VEP Decoder
 
-This is a module compatible with the [Dareplane](https://bsdlab.github.io/Dareplane/main.html) platform. It provides a decoding module to classify the code-modulated visual evoked potential (c-VEP) from the EEG.
+This is a module compatible with the [Dareplane](https://bsdlab.github.io/Dareplane/main.html) platform (Dold et al., 2025). It provides a decoding module to classify the code-modulated visual evoked potential (c-VEP) from the EEG.
 
 ## Installation
 
-To download the dp-cvep-speller, use:
+To download the dp-cvep-decoder, use:
 
-    git clone https://github.com/thijor/dp-cvep-decoder.git
+```bash
+git clone https://github.com/thijor/dp-cvep-decoder.git
+```
 
 Make sure that requirements are installed, ideally in a separate conda environment:
-
-    conda create --name dp-cvep-decoder python=3.10
-    conda activate dp-cvep-decoder
-    pip install -r requirements.txt
+```bash
+conda create --name dp-cvep-decoder python=3.10
+conda activate dp-cvep-decoder
+pip install -r requirements.txt
+```
 
 ## Getting started
 
-To run the dp-cvep-speller module in isolation, use:
+To run the dp-cvep-decoder module in isolation, use:
 
-    python -m cvep_decoder.decoder.py
+```bash
+python -m cvep_decoder.online_decoding
+```
 
-This will run a minimal example using defaults as specified in `configs/decoder.toml`.
+This will run the decoder using defaults as specified in `configs/decoder.toml`.
 
 ## Citation
 
-If you use [Dareplane](https://bsdlab.github.io/Dareplane/main.html) or this model for your work, please cite both the following two references:
+If you use [Dareplane](https://bsdlab.github.io/Dareplane/main.html), specifically this module, for your work, please cite both the following two references:
 ```bibtex
 @article{dold2025,
     title = {Dareplane: a modular open-source software platform for {BCI} research with application in closed-loop deep brain stimulation},

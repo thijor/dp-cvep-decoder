@@ -1,3 +1,4 @@
+import functools
 from pathlib import Path
 
 from dareplane_utils.default_server.server import DefaultServer
@@ -20,7 +21,7 @@ def main(
     decoder = online_decoder_factory(conf_pth, preload=False)
 
     pcommand_map = {
-        "FIT MODEL": create_classifier,
+        "FIT MODEL": functools.partial(create_classifier, config_path=conf_pth),
         "LOAD MODEL": decoder.load_model,
         "CONNECT DECODER": decoder.init_all,
         "DECODE ONLINE": decoder.run,

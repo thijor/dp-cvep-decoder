@@ -81,14 +81,13 @@ def load_raw_and_events(
 ) -> tuple[np.ndarray, np.ndarray, float]:
 
     # Load EEG
-    data, _ = pyxdf.load_xdf(fpath)
-    streams = pyxdf.resolve_streams(fpath)
-    names = [stream["name"] for stream in streams]
-    x = data[names.index(data_stream_name)]["time_series"]
+    streams, _ = pyxdf.load_xdf(fpath)
+    names = [stream["info"]["name"][0] for stream in streams]
+    eeg = streams[names.index(data_stream_name)]["time_series"]
 
     # Align events to the closest time stamp in the data
-    evd = data[names.index(marker_stream_name)]
-    raw_ts = data[names.index(data_stream_name)]["time_stamps"]
+    evd = streams[names.index(marker_stream_name)]
+    raw_ts = streams[names.index(data_stream_name)]["time_stamps"]
     idx_in_raw = [np.argmin(np.abs(raw_ts - ts)) for ts in evd["time_stamps"]]
     events = np.vstack([idx_in_raw, np.asarray([e[0] for e in evd["time_series"]], dtype="object")]).T
 
@@ -97,18 +96,18 @@ def load_raw_and_events(
         if isinstance(selected_channels[0], str):
             ch_names = [
                 ch["label"][0]
-                for ch in data[names.index(data_stream_name)]["info"]["desc"][0]["channels"][0]["channel"]
+                for ch in streams[names.index(data_stream_name)]["info"]["desc"][0]["channels"][0]["channel"]
             ]
             selected_ch_idx = [ch_names.index(ch) for ch in selected_channels]
         elif isinstance(selected_channels[0], int):
             selected_ch_idx = selected_channels
         else:
             raise ValueError(f"{selected_channels=} must be a list of `str` or `int` or `None`.")
-        x = x[:, selected_ch_idx]
+        eeg = eeg[:, selected_ch_idx]
 
-    sfreq = int(float(data[names.index(data_stream_name)]["info"]["nominal_srate"][0]))
+    sfreq = int(float(streams[names.index(data_stream_name)]["info"]["nominal_srate"][0]))
 
-    return x, events, sfreq
+    return eeg, events, sfreq
 
 
 # all options beyond cfg are for overwriting the config if necessary
@@ -117,9 +116,10 @@ def create_classifier(
     training_files_glob: str | None = None,
     out_file: Path | None = None,
     out_file_meta: Path | None = None,
+    config_path: Path | None = Path("./configs/decoder.toml"),
 ) -> int:
 
-    cfg = toml.load("./configs/decoder.toml")
+    cfg = toml.load(config_path)
     # Apply overwrites
     if data_root is not None:
         cfg["data"]["data_root"] = data_root
@@ -187,11 +187,16 @@ def create_classifier(
     # Concatenate trials
     X = np.stack(eeg_list, axis=0).transpose(0, 2, 1)  # trials, channels, samples
     y = np.stack(lbl_list, axis=0)  # trials
+    assert X.shape[0] == y.shape[0], f"Unequal trials in X ({X.shape}) and y ({y.shape})"
+
+    logger.debug(f"The data X are of shape {X.shape} (trials x channels x samples) before resample")
 
     # Resample
-    X = resample(X, num=int((cmeta.tmax - cmeta.tmin) * cmeta.sfreq), axis=2)
+    X = resample(X, num=int((pad_s + cmeta.tmax - cmeta.tmin + pad_s) * cmeta.sfreq), axis=2)
     if np.isnan(X).sum() > 0:
         logger.error("NaNs found after resampling")
+
+    logger.debug(f"The data X are of shape {X.shape} (trials x channels x samples) after resample")
 
     # Remove padding interval to catch filtering artefacts
     if pad_s > 0:
@@ -233,22 +238,25 @@ def create_classifier(
 
     # Set subset of codes
     if cfg["training"]["subset_optimization"]:
-        if n_keys != 0 and n_keys < V.shape[0]:
-            Ts = model.estimator.get_T(2 * model.estimator.stimulus.shape[1])[:, 0, :]  # select component
-            subset = pyntbci.stimulus.optimize_subset_clustering(Ts, n_keys)
-            model.estimator.set_stimulus(model.estimator.stimulus[subset, :])  # set subset
-            logger.debug(f"Created optimal subset for {n_keys} keys using {Ts.shape[0]} codes")
-        else:
+        if n_keys == 0:
             subset = np.arange(n_keys)
-            logger.debug("Skipped optimal subset (Number of keys equals number of codes or Number of keys is set to 0)")
+            logger.debug("Skipped optimal subset: Number of keys equals zero")
+        elif n_keys == V.shape[0]:
+            subset = np.arange(n_keys)
+            logger.debug("Skipped optimal subset: Number of keys equals number of codes")
+        elif n_keys > V.shape[0]:
+            raise ValueError("Number of keys greater than number of codes")
+        else:
+            Ts = model.estimator.Ts_[:, 0, :]  # select first component
+            subset = pyntbci.stimulus.optimize_subset_clustering(Ts, n_keys)
+            logger.debug(f"Created optimal subset for {n_keys} keys using {Ts.shape[0]} codes")
     else:
         subset = np.arange(n_keys)
-        model.estimator.set_stimulus(model.estimator.stimulus[subset, :])  # set subset
+    model.estimator.set_stimulus(model.estimator.stimulus[subset, :])  # set subset
 
     # Set layout of codes
     if cfg["training"]["layout_optimization"]:
         # Hardcoded dictionaries containing a key:[n_neighbours] relationship, with only east and south neighbours
-        # TODO Should probably just store this in a JSON or ideally come-up with some non-hardcoded method.
         keyboard_dict = {
             0:  [1, 13],
             1:  [2, 13, 14],
@@ -304,10 +312,8 @@ def create_classifier(
             51: [52],
             52: [],
         }
-        if n_keys == 53:
-            pass
-        else:
-            keyboard_dict = dict()
+        if n_keys != 53:
+            raise ValueError("Number of keys should be 53 to make use of hardcoded neighbours")
 
         # Convert the hard-coded dict into nd.array of shape (neighbours, 2)
         neighbour_set = []
@@ -317,13 +323,12 @@ def create_classifier(
         neighbours = np.array(neighbour_set)
 
         # Optimal layout of codes
-        Ts = model.estimator.get_T(2 * model.estimator.stimulus.shape[1])[:, 0, :]  # select component
+        Ts = model.estimator.Ts_[:, 0, :]  # select first component
         layout = pyntbci.stimulus.optimize_layout_incremental(Ts, neighbours)
-        model.estimator.set_stimulus(model.estimator.stimulus[layout, :])  # set layout
         logger.debug(f"Created optimal layout for {n_keys} keys using {Ts.shape[0]} codes")
     else:
         layout = np.arange(n_keys)
-        model.estimator.set_stimulus(model.estimator.stimulus[layout, :])  # set layout
+    model.estimator.set_stimulus(model.estimator.stimulus[layout, :])  # set layout
 
     # Save classifier
     out_file = cfg["decoder"]["decoder_file"]
@@ -447,7 +452,7 @@ def get_rcca_model_early_stop(
             max_time=cmeta.max_time,
         )
     else:
-        ValueError(f"Unknown stopping method: {cmeta.stopping}")
+        raise ValueError(f"Unknown stopping method: {cmeta.stopping}")
     return stop
 
 

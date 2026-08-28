@@ -16,8 +16,8 @@ tmax_s = 4.2
 [data]
 data_root = './data/'
 training_files_glob = 'sub-P001_ses-S001*.xdf'   # looked up in data_root
-selected_channels = ["EX1", "EX2", "EX3", "EX4", "EX5", "EX6", "EX7"]
-capfile = "./cvep_decoder/caps/biosemi7.loc"
+selected_channels = ["EX1", "EX2", "EX3", "EX4", "EX5", "EX6"]
+capfile = "./cvep_decoder/caps/biosemi6.loc"
 target_freq_hz = 120
 passband_hz = [6, 40]
 
@@ -44,5 +44,5 @@ layout_optimization = false
 
 [online]
 codes_file = '../tests/assets/mgold_61_6521.npz'
-sleep_s = 0.1  # time between updates in seconds
+t_sleep_s = 0.1  # time between updates in seconds
 max_eval_time_s = 10  # maximum time for continuous evaluation

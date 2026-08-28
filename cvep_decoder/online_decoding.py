@@ -65,8 +65,8 @@ class OnlineDecoder:
             buffer_size_s: float,
             padding_size_s: float,
             start_eval_marker: str,
-            max_eval_time_s: float = 10,
             t_sleep_s: float = 0.1,
+            max_eval_time_s: float = 10,
             selected_channels: list[str] | None = None,
     ):
 
@@ -78,8 +78,8 @@ class OnlineDecoder:
         self.buffer_size_s = buffer_size_s
         self.padding_size_s = padding_size_s
         self.start_eval_marker = start_eval_marker
-        self.max_eval_time_s = max_eval_time_s
         self.t_sleep_s = t_sleep_s
+        self.max_eval_time_s = max_eval_time_s
         self.selected_channels = selected_channels
 
         self.selected_ch_idx = None
@@ -151,17 +151,15 @@ class OnlineDecoder:
 
         if self.selected_channels is None:
             self.selected_ch_idx = list(range(len(self.input_chs_info)))
+        elif isinstance(self.selected_channels[0], str):
+            self.selected_ch_idx = [
+                self.input_sw.channel_names.index(ch)
+                for ch in self.selected_channels
+            ]
+        elif isinstance(self.selected_channels[0], int):
+            self.selected_ch_idx = self.selected_channels
         else:
-            if isinstance(self.selected_channels[0], str):
-                self.selected_ch_idx = [
-                    self.input_sw.channel_names.index(ch)
-                    for ch in self.selected_channels
-                ]
-            elif isinstance(self.selected_channels[0], int):
-                self.selected_ch_idx = self.selected_channels
-            else:
-                raise logger.error(f"{self.selected_channels=} must be a list of `str` or `int` or `None`.")
-            return 1
+            raise ValueError(f"{self.selected_channels=} must be a list of `str` or `int` or `None`.")
 
         return 0
 
@@ -230,11 +228,10 @@ class OnlineDecoder:
                 self.is_decoding = False
             else:
                 # Decoding
-                if self.is_decoding:
-                    x = self._create_epoch()
-                    if x.shape[2] > 0:
-                        xs = self._resample(x)
-                        self._classify(xs)
+                x = self._create_epoch()
+                if x.shape[2] > 0:
+                    xs = self._resample(x)
+                    self._classify(xs)
 
     def check_if_decoding_should_start(self):
         if self.input_mrk_sw is None:
@@ -251,7 +248,7 @@ class OnlineDecoder:
                 self.internal_decoding_start_time = time.time()
 
                 # get time stamp of start_eval_marker --> consider inputs for epoch from this onwards
-                idx = np.where(markers == self.start_eval_marker)[0]
+                idx = np.where(markers == self.start_eval_marker)[0][0]
                 self.start_eval_time = markers_t[idx]
 
     def _filter(self):
@@ -274,7 +271,7 @@ class OnlineDecoder:
         # Add padding interval to catch filtering artefacts
         if self.padding_size_s is not None and self.padding_size_s > 0:
             pad = int(self.input_sfreq * self.padding_size_s)
-            idx -= pad
+            idx = max(0, idx - pad)
             logger.debug(f"Added {pad} samples padding to catch filter artfacts")
 
         # Select trial relevant data
@@ -321,7 +318,7 @@ class OnlineDecoder:
         # If y=-1 then the classifier is not yet sufficiently certain to emit the classification
         if y >= 0:
             logger.debug(f"Pushing prediction {y}.")
-            self.output_sw.push_sample([np.int64(y)])
+            self.output_sw.push_sample([np.int8(y)])
             self.is_decoding = False
 
     def _run_loop(self, stop_event: threading.Event):
@@ -329,6 +326,7 @@ class OnlineDecoder:
         logger.debug("Starting the run loop")
         if self.input_sw is None or self.output_sw is None or self.classifier is None:
             logger.error("Streams or decoding not initialized, call init_all first.")
+            return
 
         while not stop_event.is_set():
             t_start = pylsl.local_clock()
@@ -341,7 +339,8 @@ class OnlineDecoder:
 
 
 def online_decoder_factory(
-        config_path: Path = Path("./configs/decoder.toml"), preload: bool = True
+        config_path: Path = Path("./configs/decoder.toml"),
+        preload: bool = True,
 ):
     """Factory function to create an OnlineDecoder object from a config file."""
     cfg = toml.load(config_path)
@@ -355,6 +354,7 @@ def online_decoder_factory(
         buffer_size_s=cfg["streams"]["buffer_size_s"],
         padding_size_s=cfg["streams"]["padding_size_s"],
         start_eval_marker=cfg["stimulus"]["trial_marker"],
+        t_sleep_s=cfg["online"]["t_sleep_s"],
         max_eval_time_s=cfg["online"]["max_eval_time_s"],
         selected_channels=cfg["data"].get("selected_channels", None),
     )
@@ -366,7 +366,8 @@ def online_decoder_factory(
 
 
 def cli_run_decoder(
-        conf_pth: Path = Path("./configs/decoder.toml"), log_level: int = 30
+        conf_pth: Path = Path("./configs/decoder.toml"),
+        log_level: int = 30,
 ):
     # if the CLI is run, we most likely also want a console output
     logger = get_logger("cvep_decoder", add_console_handler=True)
