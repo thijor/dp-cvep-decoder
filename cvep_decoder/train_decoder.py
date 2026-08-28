@@ -168,12 +168,13 @@ def create_classifier(
 
         # Add padding interval to catch filtering artefacts
         if cfg["streams"]["padding_size_s"] is not None and cfg["streams"]["padding_size_s"] > 0:
-            pad = int(cfg["streams"]["padding_size_s"] * sfreq)
-            onsets -= pad
+            pad_s = cfg["streams"]["padding_size_s"]
+        else:
+            pad_s = 0
 
         # Slice data to trials including padding interval to remove filtering artefacts
         eeg_list += [
-            xf[t - int(cmeta.tmin * sfreq):t + int(cmeta.tmax * sfreq), :]
+            xf[t + int((-pad_s + cmeta.tmin) * sfreq):t + int((cmeta.tmax + pad_s) * sfreq), :]
             for t in onsets
         ]
 
@@ -193,9 +194,9 @@ def create_classifier(
         logger.error("NaNs found after resampling")
 
     # Remove padding interval to catch filtering artefacts
-    if cfg["streams"]["padding_size_s"] is not None and cfg["streams"]["padding_size_s"] > 0:
-        pad = int(cfg["streams"]["padding_size_s"] * cmeta.sfreq)
-        X = X[:, :, pad:]
+    if pad_s > 0:
+        pad = int(pad_s * cmeta.sfreq)
+        X = X[:, :, pad:-pad]
 
     # Load stimulus sequences
     n_keys = cfg["stimulus"]["n_keys"]
@@ -231,7 +232,7 @@ def create_classifier(
         model.estimator.set_stimulus(V)
 
     # Set subset of codes
-    if cfg["training"]["optimize_subset"]:
+    if cfg["training"]["subset_optimization"]:
         if n_keys != 0 and n_keys < V.shape[0]:
             Ts = model.estimator.get_T(2 * model.estimator.stimulus.shape[1])[:, 0, :]  # select component
             subset = pyntbci.stimulus.optimize_subset_clustering(Ts, n_keys)
@@ -245,7 +246,7 @@ def create_classifier(
         model.estimator.set_stimulus(model.estimator.stimulus[subset, :])  # set subset
 
     # Set layout of codes
-    if cfg["training"]["optimize_layout"]:
+    if cfg["training"]["layout_optimization"]:
         # Hardcoded dictionaries containing a key:[n_neighbours] relationship, with only east and south neighbours
         # TODO Should probably just store this in a JSON or ideally come-up with some non-hardcoded method.
         keyboard_dict = {
