@@ -6,12 +6,12 @@ This is a module compatible with the [Dareplane](https://bsdlab.github.io/Darepl
 
 To download the dp-cvep-decoder, use:
 
-```bash
+```commandline
 git clone https://github.com/thijor/dp-cvep-decoder.git
 ```
 
 Make sure that requirements are installed, ideally in a separate conda environment:
-```bash
+```commandline
 conda create --name dp-cvep-decoder python=3.10
 conda activate dp-cvep-decoder
 pip install -r requirements.txt
@@ -21,7 +21,7 @@ pip install -r requirements.txt
 
 To run the dp-cvep-decoder module in isolation, use:
 
-```bash
+```commandline
 python -m cvep_decoder.online_decoding
 ```
 

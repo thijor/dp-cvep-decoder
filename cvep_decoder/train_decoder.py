@@ -206,7 +206,7 @@ def create_classifier(
     # Load stimulus sequences
     n_keys = cfg["stimulus"]["n_keys"]
     V = np.repeat(
-        np.load(cfg["training"]["codes_file"])["codes"],
+        np.loadtxt(cfg["training"]["codes_file"], delimiter=","),
         int(cmeta.sfreq / cmeta.presentation_rate),
         axis=1,
     )
@@ -229,7 +229,7 @@ def create_classifier(
     if cfg["online"]["codes_file"] != cfg["training"]["codes_file"]:
         logger.info("Different codeset for training and online phase detected.")
         V = np.repeat(
-            np.load(cfg["online"]["codes_file"])["codes"],
+            np.loadtxt(cfg["online"]["codes_file"], delimiter=","),
             int(cmeta.sfreq / cmeta.presentation_rate),
             axis=1,
         )

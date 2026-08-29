@@ -38,11 +38,11 @@ cr = 1.0
 trained = false
 
 [training]
-codes_file = '../tests/assets/mgold_61_6521.npz'
+codes_file = 'mgold_61_6521.txt'
 subset_optimization = false
 layout_optimization = false
 
 [online]
-codes_file = '../tests/assets/mgold_61_6521.npz'
+codes_file = 'mgold_61_6521.txt'
 t_sleep_s = 0.1  # time between updates in seconds
 max_eval_time_s = 10  # maximum time for continuous evaluation
