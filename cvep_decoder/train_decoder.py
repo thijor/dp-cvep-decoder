@@ -240,10 +240,10 @@ def create_classifier(
     if cfg["training"]["subset_optimization"]:
         if n_keys == 0:
             subset = np.arange(n_keys)
-            logger.debug("Skipped optimal subset: Number of keys equals zero")
+            logger.debug(f"Skipped optimal subset, as n_keys==0: using first {n_keys} codes")
         elif n_keys == V.shape[0]:
             subset = np.arange(n_keys)
-            logger.debug("Skipped optimal subset: Number of keys equals number of codes")
+            logger.debug(f"Skipped optimal subset, as n_keys==n_codes: using first {n_keys} codes")
         elif n_keys > V.shape[0]:
             raise ValueError("Number of keys greater than number of codes")
         else:
@@ -252,6 +252,7 @@ def create_classifier(
             logger.debug(f"Created optimal subset for {n_keys} keys using {Ts.shape[0]} codes")
     else:
         subset = np.arange(n_keys)
+        logger.debug(f"Skipped optimal subset: Using first {n_keys} codes")
     model.estimator.set_stimulus(model.estimator.stimulus[subset, :])  # set subset
 
     # Set layout of codes
@@ -328,6 +329,7 @@ def create_classifier(
         logger.debug(f"Created optimal layout for {n_keys} keys using {Ts.shape[0]} codes")
     else:
         layout = np.arange(n_keys)
+        logger.debug(f"Skipped optimal layout, using 1:1:{n_keys} as layout")
     model.estimator.set_stimulus(model.estimator.stimulus[layout, :])  # set layout
 
     # Save classifier
